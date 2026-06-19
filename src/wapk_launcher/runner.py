@@ -47,6 +47,7 @@ class AppRunner:
         backend = subprocess.Popen(
             [str(exe_path(manifest.id)), *manifest.args_for_port(port)],
             cwd=exe_path(manifest.id).parent,
+            creationflags=_backend_creation_flags(),
         )
 
         try:
@@ -118,3 +119,9 @@ def _terminate(process: subprocess.Popen) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=3)
+
+
+def _backend_creation_flags() -> int:
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return subprocess.CREATE_NO_WINDOW
+    return 0
