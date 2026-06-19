@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
 import subprocess
 import time
 from urllib.request import urlopen
@@ -22,22 +23,25 @@ class RunningApp:
 class AppRunner:
     def __init__(self) -> None:
         self.running: dict[str, RunningApp] = {}
+        self.lock = RLock()
 
     def is_running(self, app_id: str) -> bool:
-        running = self.running.get(app_id)
-        if not running:
-            return False
-        if running.backend.poll() is not None:
-            self.running.pop(app_id, None)
-            return False
-        if running.webview is not None and running.webview.poll() is not None:
-            self.stop(app_id)
-            return False
-        return True
+        with self.lock:
+            running = self.running.get(app_id)
+            if not running:
+                return False
+            if running.backend.poll() is not None:
+                self.running.pop(app_id, None)
+                return False
+            if running.webview is not None and running.webview.poll() is not None:
+                self.stop(app_id)
+                return False
+            return True
 
     def start(self, manifest: WapkManifest) -> RunningApp:
-        if self.is_running(manifest.id):
-            return self.running[manifest.id]
+        with self.lock:
+            if self.is_running(manifest.id):
+                return self.running[manifest.id]
 
         port = find_free_port(*manifest.port_range)
         backend = subprocess.Popen(
@@ -60,11 +64,13 @@ class AppRunner:
             raise
 
         running = RunningApp(manifest=manifest, port=port, backend=backend, webview=webview)
-        self.running[manifest.id] = running
+        with self.lock:
+            self.running[manifest.id] = running
         return running
 
     def stop(self, app_id: str) -> None:
-        running = self.running.pop(app_id, None)
+        with self.lock:
+            running = self.running.pop(app_id, None)
         if not running:
             return
         if running.webview is not None:
@@ -76,7 +82,9 @@ class AppRunner:
             self.stop(app_id)
 
     def statuses(self) -> dict[str, bool]:
-        return {app_id: self.is_running(app_id) for app_id in list(self.running)}
+        with self.lock:
+            app_ids = list(self.running)
+        return {app_id: self.is_running(app_id) for app_id in app_ids}
 
     def _wait_ready(self, manifest: WapkManifest, port: int, backend: subprocess.Popen) -> None:
         ready_url = manifest.ready_url_for_port(port)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+from concurrent.futures import Future, ThreadPoolExecutor
 import ctypes
 import sys
 import tkinter as tk
@@ -20,6 +21,8 @@ class LauncherApp(tk.Tk):
         self.minsize(680, 380)
         self.runner = AppRunner()
         self.apps: list[InstalledApp] = []
+        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="wapk-worker")
+        self.busy_count = 0
 
         self._build_ui()
         self.refresh()
@@ -52,11 +55,17 @@ class LauncherApp(tk.Tk):
         buttons = ttk.Frame(root)
         buttons.pack(fill=tk.X, pady=(10, 0))
 
-        ttk.Button(buttons, text="WAPK 열기", command=self.pick_wapk).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="실행", command=self.run_selected).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(buttons, text="종료", command=self.stop_selected).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(buttons, text="삭제", command=self.delete_selected).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(buttons, text="새로고침", command=self.refresh).pack(side=tk.LEFT, padx=(8, 0))
+        self.open_button = ttk.Button(buttons, text="WAPK 열기", command=self.pick_wapk)
+        self.run_button = ttk.Button(buttons, text="실행", command=self.run_selected)
+        self.stop_button = ttk.Button(buttons, text="종료", command=self.stop_selected)
+        self.delete_button = ttk.Button(buttons, text="삭제", command=self.delete_selected)
+        self.refresh_button = ttk.Button(buttons, text="새로고침", command=self.refresh)
+
+        self.open_button.pack(side=tk.LEFT)
+        self.run_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.stop_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.delete_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.refresh_button.pack(side=tk.LEFT, padx=(8, 0))
 
         self.status = tk.StringVar(value="준비됨")
         ttk.Label(root, textvariable=self.status, anchor=tk.W).pack(fill=tk.X, pady=(10, 0))
@@ -70,18 +79,18 @@ class LauncherApp(tk.Tk):
             self.install_wapk(Path(file_name), run_after=False)
 
     def install_wapk(self, path: Path, run_after: bool) -> None:
-        try:
+        def task() -> InstalledApp:
             manifest = WapkManifest.load(path)
-            self.status.set(f"{manifest.name} 설치 중...")
-            self.update_idletasks()
-            installed = install_manifest(manifest)
+            self._set_status_async(f"{manifest.name} 설치 중...")
+            return install_manifest(manifest)
+
+        def done(installed: InstalledApp) -> None:
             self.refresh()
             self.status.set(f"{installed.manifest.name} 설치 완료")
             if run_after:
                 self._run(installed.manifest)
-        except (ManifestError, Exception) as exc:
-            self.status.set("설치 실패")
-            messagebox.showerror("WAPK 설치 실패", str(exc))
+
+        self._submit_task(task, done, "WAPK 설치 실패", "설치 실패")
 
     def refresh(self) -> None:
         self.runner.statuses()
@@ -101,9 +110,11 @@ class LauncherApp(tk.Tk):
             )
 
     def _poll_running_apps(self) -> None:
-        before = set(self.runner.running)
+        with self.runner.lock:
+            before = set(self.runner.running)
         self.runner.statuses()
-        after = set(self.runner.running)
+        with self.runner.lock:
+            after = set(self.runner.running)
         if before != after:
             stopped_ids = before - after
             self.refresh()
@@ -126,13 +137,15 @@ class LauncherApp(tk.Tk):
             self._run(app.manifest)
 
     def _run(self, manifest: WapkManifest) -> None:
-        try:
-            running = self.runner.start(manifest)
+        def task():
+            return self.runner.start(manifest)
+
+        def done(running) -> None:
             self.status.set(f"{manifest.name} 실행 중: port {running.port}")
             self.refresh()
-        except Exception as exc:
-            self.status.set("실행 실패")
-            messagebox.showerror("앱 실행 실패", str(exc))
+
+        self.status.set(f"{manifest.name} 실행 준비 중...")
+        self._submit_task(task, done, "앱 실행 실패", "실행 실패")
 
     def stop_selected(self) -> None:
         app = self.selected_app()
@@ -148,13 +161,51 @@ class LauncherApp(tk.Tk):
             return
         if not messagebox.askyesno("앱 삭제", f"{app.manifest.name}을 삭제할까요?"):
             return
-        self.runner.stop(app.manifest.id)
-        delete_app(app.manifest.id)
-        self.status.set(f"{app.manifest.name} 삭제됨")
-        self.refresh()
+
+        def task() -> None:
+            self.runner.stop(app.manifest.id)
+            delete_app(app.manifest.id)
+
+        def done(_: None) -> None:
+            self.status.set(f"{app.manifest.name} 삭제됨")
+            self.refresh()
+
+        self.status.set(f"{app.manifest.name} 삭제 중...")
+        self._submit_task(task, done, "앱 삭제 실패", "삭제 실패")
+
+    def _submit_task(self, task, on_success, error_title: str, error_status: str) -> None:
+        self._set_busy(True)
+        future = self.executor.submit(task)
+
+        def callback(done_future: Future) -> None:
+            self.after(0, lambda: self._finish_task(done_future, on_success, error_title, error_status))
+
+        future.add_done_callback(callback)
+
+    def _finish_task(self, future: Future, on_success, error_title: str, error_status: str) -> None:
+        self._set_busy(False)
+        try:
+            result = future.result()
+        except (ManifestError, Exception) as exc:
+            self.status.set(error_status)
+            messagebox.showerror(error_title, str(exc))
+            return
+        on_success(result)
+
+    def _set_busy(self, busy: bool) -> None:
+        self.busy_count += 1 if busy else -1
+        if self.busy_count < 0:
+            self.busy_count = 0
+        state = tk.DISABLED if self.busy_count else tk.NORMAL
+        for button in (self.open_button, self.run_button, self.delete_button, self.refresh_button):
+            button.configure(state=state)
+
+    def _set_status_async(self, text: str) -> None:
+        self.after(0, lambda: self.status.set(text))
 
     def _on_close(self) -> None:
         self.runner.stop_all()
+        self.executor.shutdown(wait=False, cancel_futures=True)
         self.destroy()
 
 
