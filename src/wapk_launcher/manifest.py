@@ -12,6 +12,7 @@ APP_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PLACEHOLDER = "{PORT}"
 WINDOW_LEVELS = {"normal", "top", "bottom"}
+APP_MODES = {"backend", "html", "online"}
 
 
 class ManifestError(ValueError):
@@ -53,10 +54,12 @@ class WapkManifest:
     id: str
     name: str
     version: str
+    mode: str
     repository: str
     ref: str
-    app_exe: str
-    app_html: str
+    app_exe: str | None
+    app_html: str | None
+    url: str | None
     args: tuple[str, ...]
     port_range: tuple[int, int]
     ready_url: str | None
@@ -107,9 +110,19 @@ class WapkManifest:
 
         name = _optional_plain_str(data, "name", app_id)
         version = _optional_plain_str(data, "version", "0.0.0")
+        mode = _optional_plain_str(data, "mode", "backend")
+        if mode not in APP_MODES:
+            raise ManifestError("mode는 backend, html, online 중 하나여야 합니다.")
         ref = _optional_plain_str(data, "ref", "main")
-        app_exe = _optional_plain_str(data, "app_exe", "app.exe")
-        app_html = _optional_plain_str(data, "app_html", "app.html")
+        app_exe = _optional_plain_str(data, "app_exe", "app.exe" if mode == "backend" else None)
+        app_html = _optional_plain_str(data, "app_html", "app.html" if mode in {"backend", "html"} else None)
+        url = _optional_plain_str(data, "url", None)
+        if mode == "backend" and (app_exe is None or app_html is None):
+            raise ManifestError("backend 모드는 app_exe와 app_html이 필요합니다.")
+        if mode == "html" and app_html is None:
+            raise ManifestError("html 모드는 app_html이 필요합니다.")
+        if mode == "online" and url is None:
+            raise ManifestError("online 모드는 url이 필요합니다.")
 
         raw_args = data.get("args", [])
         if not isinstance(raw_args, list) or not all(isinstance(item, str) for item in raw_args):
@@ -140,10 +153,12 @@ class WapkManifest:
             id=app_id,
             name=name,
             version=version,
+            mode=mode,
             repository=repository,
             ref=ref,
             app_exe=app_exe,
             app_html=app_html,
+            url=url,
             args=args,
             port_range=(port_start, port_end),
             ready_url=ready_url,
@@ -156,15 +171,20 @@ class WapkManifest:
             f'id = "{_toml_escape(self.id)}"',
             f'name = "{_toml_escape(self.name)}"',
             f'version = "{_toml_escape(self.version)}"',
+            f'mode = "{_toml_escape(self.mode)}"',
         ]
         lines.extend(
             [
                 f'repository = "{_toml_escape(self.repository)}"',
                 f'ref = "{_toml_escape(self.ref)}"',
-                f'app_exe = "{_toml_escape(self.app_exe)}"',
-                f'app_html = "{_toml_escape(self.app_html)}"',
             ]
         )
+        if self.app_exe is not None:
+            lines.append(f'app_exe = "{_toml_escape(self.app_exe)}"')
+        if self.app_html is not None:
+            lines.append(f'app_html = "{_toml_escape(self.app_html)}"')
+        if self.url is not None:
+            lines.append(f'url = "{_toml_escape(self.url)}"')
 
         lines.extend(
             [

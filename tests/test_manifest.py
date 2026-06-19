@@ -10,6 +10,7 @@ VALID_TOML = """
 id = "mini-timetable"
 name = "Mini Timetable"
 version = "0.1.0"
+mode = "backend"
 repository = "example/mini-timetable"
 ref = "main"
 app_exe = "dist/app.exe"
@@ -36,6 +37,7 @@ class ManifestTests(unittest.TestCase):
             manifest = WapkManifest.load(path)
 
         self.assertEqual(manifest.id, "mini-timetable")
+        self.assertEqual(manifest.mode, "backend")
         self.assertEqual(manifest.repository, "example/mini-timetable")
         self.assertEqual(manifest.app_exe, "dist/app.exe")
         self.assertEqual(manifest.app_html, "app.html")
@@ -46,6 +48,37 @@ class ManifestTests(unittest.TestCase):
         self.assertFalse(manifest.window.fullscreen)
         self.assertTrue(manifest.window.transparent)
         self.assertEqual(manifest.window.level, "bottom")
+
+    def test_load_html_mode(self) -> None:
+        manifest = WapkManifest.from_dict(
+            __import__("tomllib").loads(
+                """
+repository = "example/html-app"
+mode = "html"
+app_html = "index.html"
+"""
+            )
+        )
+
+        self.assertEqual(manifest.mode, "html")
+        self.assertIsNone(manifest.app_exe)
+        self.assertEqual(manifest.app_html, "index.html")
+
+    def test_load_online_mode(self) -> None:
+        manifest = WapkManifest.from_dict(
+            __import__("tomllib").loads(
+                """
+repository = "example/online-app"
+mode = "online"
+url = "https://google.com"
+"""
+            )
+        )
+
+        self.assertEqual(manifest.mode, "online")
+        self.assertIsNone(manifest.app_exe)
+        self.assertIsNone(manifest.app_html)
+        self.assertEqual(manifest.url, "https://google.com")
 
     def test_rejects_zip_wapk(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

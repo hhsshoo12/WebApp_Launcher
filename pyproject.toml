@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-wapk-launcher = "wapk_launcher.app:main"
+wapk-launcher = "wapk_launcher.cli:main"
 
 [build-system]
 requires = ["hatchling"]

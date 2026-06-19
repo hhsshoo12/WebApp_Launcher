@@ -9,7 +9,8 @@ use winit::{
 use wry::{WebView, WebViewBuilder};
 
 struct Args {
-    html: PathBuf,
+    html: Option<PathBuf>,
+    url: Option<String>,
     runtime_json: String,
     title: String,
     borderless: bool,
@@ -22,6 +23,8 @@ struct Args {
 struct App {
     title: String,
     html: String,
+    url: Option<String>,
+    runtime_script: String,
     options: Args,
     window: Option<Window>,
     webview: Option<WebView>,
@@ -49,12 +52,16 @@ impl ApplicationHandler for App {
             .create_window(attrs)
             .expect("failed to create window");
 
-        let webview = WebViewBuilder::new()
+        let builder = WebViewBuilder::new()
             .with_transparent(self.options.transparent)
-            .with_devtools(self.options.devtools)
-            .with_html(&self.html)
-            .build(&window)
-            .expect("failed to build webview");
+            .with_initialization_script(self.runtime_script.clone())
+            .with_devtools(self.options.devtools);
+        let webview = if let Some(url) = &self.url {
+            builder.with_url(url).build(&window)
+        } else {
+            builder.with_html(&self.html).build(&window)
+        }
+        .expect("failed to build webview");
 
         if self.options.devtools {
             webview.open_devtools();
@@ -78,13 +85,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let runtime_value: serde_json::Value = serde_json::from_str(&args.runtime_json)?;
     let runtime_json = serde_json::to_string(&runtime_value)?;
 
-    let source = fs::read_to_string(&args.html)?;
-    let injected = inject_runtime(&source, &runtime_json);
+    let html_source = if let Some(html) = &args.html {
+        fs::read_to_string(html)?
+    } else {
+        String::new()
+    };
+    let runtime_script = runtime_initialization_script(&runtime_json);
 
     let event_loop = EventLoop::new()?;
     let mut app = App {
         title: args.title.clone(),
-        html: injected,
+        html: html_source,
+        url: args.url.clone(),
+        runtime_script,
         options: args,
         window: None,
         webview: None,
@@ -106,6 +119,7 @@ fn enable_high_dpi() {
 
 fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut html: Option<PathBuf> = None;
+    let mut url: Option<String> = None;
     let mut runtime_json: Option<String> = None;
     let mut title = String::from("WAPK App");
     let mut borderless = false;
@@ -118,6 +132,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--html" => html = iter.next().map(PathBuf::from),
+            "--url" => url = iter.next(),
             "--runtime-json" => runtime_json = iter.next(),
             "--title" => {
                 title = iter
@@ -136,8 +151,13 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         }
     }
 
+    if html.is_some() == url.is_some() {
+        return Err("exactly one of --html or --url is required".into());
+    }
+
     Ok(Args {
-        html: html.ok_or("--html is required")?,
+        html,
+        url,
         runtime_json: runtime_json.ok_or("--runtime-json is required")?,
         title,
         borderless,
@@ -157,23 +177,11 @@ fn parse_window_level(value: &str) -> Result<WindowLevel, Box<dyn Error>> {
     }
 }
 
-fn inject_runtime(html: &str, runtime_json: &str) -> String {
-    let script = format!(
+fn runtime_initialization_script(runtime_json: &str) -> String {
+    format!(
         r#"<script>window.__WAPK__=Object.freeze({runtime_json});</script>"#
-    );
-
-    if let Some(index) = find_case_insensitive(html, "<head>") {
-        let insert_at = index + "<head>".len();
-        let mut output = String::with_capacity(html.len() + script.len());
-        output.push_str(&html[..insert_at]);
-        output.push_str(&script);
-        output.push_str(&html[insert_at..]);
-        return output;
-    }
-
-    format!("{script}{html}")
-}
-
-fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
-    haystack.to_lowercase().find(&needle.to_lowercase())
+    )
+    .trim_start_matches("<script>")
+    .trim_end_matches("</script>")
+    .to_string()
 }

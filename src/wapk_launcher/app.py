@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import argparse
 from concurrent.futures import Future, ThreadPoolExecutor
-import ctypes
-import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from .creator import WebAppCreator
 from .manifest import ManifestError, WapkManifest
 from .runner import AppRunner
 from .settings import GlobalSettings
@@ -25,6 +23,7 @@ class LauncherApp(tk.Tk):
         self.apps: list[InstalledApp] = []
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="wapk-worker")
         self.busy_count = 0
+        self.status = tk.StringVar(value="준비됨")
 
         self._build_ui()
         self.refresh()
@@ -41,20 +40,24 @@ class LauncherApp(tk.Tk):
         root = ttk.Frame(notebook, padding=12)
         settings_tab = ttk.Frame(notebook, padding=12)
         notebook.add(root, text="앱")
+        creator_tab = WebAppCreator(notebook, self.status)
+        notebook.add(creator_tab, text="웹앱 제작기")
         notebook.add(settings_tab, text="설정")
 
         self.tree = ttk.Treeview(
             root,
-            columns=("name", "version", "installed", "running"),
+            columns=("name", "version", "mode", "installed", "running"),
             show="headings",
             selectmode="browse",
         )
         self.tree.heading("name", text="앱 이름")
         self.tree.heading("version", text="버전")
+        self.tree.heading("mode", text="모드")
         self.tree.heading("installed", text="설치 상태")
         self.tree.heading("running", text="실행 상태")
-        self.tree.column("name", width=300)
+        self.tree.column("name", width=260)
         self.tree.column("version", width=110, anchor=tk.CENTER)
+        self.tree.column("mode", width=90, anchor=tk.CENTER)
         self.tree.column("installed", width=120, anchor=tk.CENTER)
         self.tree.column("running", width=120, anchor=tk.CENTER)
         self.tree.pack(fill=tk.BOTH, expand=True)
@@ -74,7 +77,6 @@ class LauncherApp(tk.Tk):
         self.delete_button.pack(side=tk.LEFT, padx=(8, 0))
         self.refresh_button.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.status = tk.StringVar(value="준비됨")
         ttk.Label(root, textvariable=self.status, anchor=tk.W).pack(fill=tk.X, pady=(10, 0))
 
         self.show_backend_console = tk.BooleanVar(value=self.settings.show_backend_console)
@@ -133,6 +135,7 @@ class LauncherApp(tk.Tk):
                 values=(
                     app.manifest.name,
                     app.manifest.version,
+                    app.manifest.mode,
                     "설치됨" if app.installed else "불완전",
                     "실행 중" if self.runner.is_running(app.manifest.id) else "정지",
                 ),
@@ -170,7 +173,8 @@ class LauncherApp(tk.Tk):
             return self.runner.start(manifest)
 
         def done(running) -> None:
-            self.status.set(f"{manifest.name} 실행 중: port {running.port}")
+            port_text = f": port {running.port}" if running.port is not None else ""
+            self.status.set(f"{manifest.name} 실행 중{port_text}")
             self.refresh()
 
         self.status.set(f"{manifest.name} 실행 준비 중...")
@@ -238,48 +242,5 @@ class LauncherApp(tk.Tk):
         self.destroy()
 
 
-def main(argv: list[str] | None = None) -> None:
-    _enable_high_dpi()
-    parser = argparse.ArgumentParser(description="WAPK Launcher MVP")
-    parser.add_argument("wapk", nargs="?", help="열거나 설치할 .wapk TOML 파일")
-    parser.add_argument("--install", action="store_true", help="GUI 없이 .wapk를 설치하고 종료")
-    parser.add_argument("--run", action="store_true", help="GUI 없이 .wapk를 설치한 뒤 실행")
-    parser.add_argument("--list", action="store_true", help="설치된 앱 목록을 출력하고 종료")
-    parsed = parser.parse_args(sys.argv[1:] if argv is None else argv)
-
-    if parsed.list:
-        for app in list_installed():
-            print(f"{app.manifest.id}\t{app.manifest.name}\t{app.manifest.version}\t{app.installed}")
-        return
-
-    if parsed.install or parsed.run:
-        if not parsed.wapk:
-            parser.error("--install/--run에는 .wapk 경로가 필요합니다.")
-        manifest = WapkManifest.load(Path(parsed.wapk).resolve())
-        installed = install_manifest(manifest)
-        print(f"installed {installed.manifest.id} {installed.manifest.version}")
-        if parsed.run:
-            runner = AppRunner(GlobalSettings.load())
-            try:
-                running = runner.start(installed.manifest)
-                print(f"running {installed.manifest.id} port={running.port}")
-                running.backend.wait()
-            finally:
-                runner.stop_all()
-        return
-
-    initial = Path(parsed.wapk).resolve() if parsed.wapk else None
-    app = LauncherApp(initial)
-    app.mainloop()
-
-
-def _enable_high_dpi() -> None:
-    if sys.platform != "win32":
-        return
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+# 하위 호환성을 위해 CLI 엔트리포인트를 가져와 노출합니다.
+from .cli import main

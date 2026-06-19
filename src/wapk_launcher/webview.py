@@ -15,7 +15,8 @@ class WebViewError(RuntimeError):
 
 
 def launch_webview(
-    html_file: Path,
+    html_file: Path | None,
+    url: str | None,
     runtime: dict[str, object],
     title: str,
     window: WindowOptions,
@@ -24,8 +25,6 @@ def launch_webview(
     binary = _ensure_webview_binary()
     command = [
         str(binary),
-        "--html",
-        str(html_file),
         "--runtime-json",
         json.dumps(runtime, ensure_ascii=False, separators=(",", ":")),
         "--title",
@@ -33,6 +32,12 @@ def launch_webview(
         "--window-level",
         window.level,
     ]
+    if url is not None:
+        command.extend(["--url", url])
+    elif html_file is not None:
+        command.extend(["--html", str(html_file)])
+    else:
+        raise WebViewError("html_file 또는 url이 필요합니다.")
     if settings.show_browser_console:
         command.append("--devtools")
     if window.borderless:

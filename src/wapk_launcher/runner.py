@@ -16,8 +16,8 @@ from .webview import launch_webview
 @dataclass
 class RunningApp:
     manifest: WapkManifest
-    port: int
-    backend: subprocess.Popen
+    port: int | None
+    backend: subprocess.Popen | None
     webview: subprocess.Popen | None
 
 
@@ -32,7 +32,7 @@ class AppRunner:
             running = self.running.get(app_id)
             if not running:
                 return False
-            if running.backend.poll() is not None:
+            if running.backend is not None and running.backend.poll() is not None:
                 self.running.pop(app_id, None)
                 return False
             if running.webview is not None and running.webview.poll() is not None:
@@ -45,31 +45,37 @@ class AppRunner:
             if self.is_running(manifest.id):
                 return self.running[manifest.id]
 
-        port = find_free_port(*manifest.port_range)
-        backend = subprocess.Popen(
-            [str(exe_path(manifest.id)), *manifest.args_for_port(port)],
-            cwd=exe_path(manifest.id).parent,
-            creationflags=_backend_creation_flags(self.settings),
-        )
+        port: int | None = None
+        backend: subprocess.Popen | None = None
 
         try:
-            self._wait_ready(manifest, port, backend)
+            if manifest.mode == "backend":
+                port = find_free_port(*manifest.port_range)
+                backend = subprocess.Popen(
+                    [str(exe_path(manifest.id)), *manifest.args_for_port(port)],
+                    cwd=exe_path(manifest.id).parent,
+                    creationflags=_backend_creation_flags(self.settings),
+                )
+                self._wait_ready(manifest, port, backend)
             runtime = {
                 "appId": manifest.id,
                 "name": manifest.name,
                 "version": manifest.version,
                 "port": port,
-                "apiBase": manifest.api_base_for_port(port),
+                "mode": manifest.mode,
+                "apiBase": manifest.api_base_for_port(port) if port is not None else "",
             }
             webview = launch_webview(
-                html_path(manifest.id),
+                html_path(manifest.id) if manifest.mode != "online" else None,
+                manifest.url if manifest.mode == "online" else None,
                 runtime,
                 manifest.name,
                 manifest.window,
                 self.settings,
             )
         except Exception:
-            _terminate(backend)
+            if backend is not None:
+                _terminate(backend)
             raise
 
         running = RunningApp(manifest=manifest, port=port, backend=backend, webview=webview)
@@ -84,7 +90,8 @@ class AppRunner:
             return
         if running.webview is not None:
             _terminate(running.webview)
-        _terminate(running.backend)
+        if running.backend is not None:
+            _terminate(running.backend)
 
     def stop_all(self) -> None:
         for app_id in list(self.running):
