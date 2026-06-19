@@ -66,6 +66,8 @@ impl ApplicationHandler for App {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    enable_high_dpi();
+
     let args = parse_args()?;
     let runtime_value: serde_json::Value = serde_json::from_str(&args.runtime_json)?;
     let runtime_json = serde_json::to_string(&runtime_value)?;
@@ -83,6 +85,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+fn enable_high_dpi() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::HiDpi::{
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
 }
 
 fn parse_args() -> Result<Args, Box<dyn Error>> {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import ctypes
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -23,6 +24,7 @@ class LauncherApp(tk.Tk):
         self._build_ui()
         self.refresh()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(1000, self._poll_running_apps)
 
         if initial_wapk:
             self.after(100, lambda: self.install_wapk(initial_wapk, run_after=True))
@@ -98,6 +100,18 @@ class LauncherApp(tk.Tk):
                 ),
             )
 
+    def _poll_running_apps(self) -> None:
+        before = set(self.runner.running)
+        self.runner.statuses()
+        after = set(self.runner.running)
+        if before != after:
+            stopped_ids = before - after
+            self.refresh()
+            stopped = [app.manifest.name for app in self.apps if app.manifest.id in stopped_ids]
+            if stopped:
+                self.status.set(f"{', '.join(stopped)} 종료됨")
+        self.after(1000, self._poll_running_apps)
+
     def selected_app(self) -> InstalledApp | None:
         selected = self.tree.selection()
         if not selected:
@@ -145,6 +159,7 @@ class LauncherApp(tk.Tk):
 
 
 def main(argv: list[str] | None = None) -> None:
+    _enable_high_dpi()
     parser = argparse.ArgumentParser(description="WAPK Launcher MVP")
     parser.add_argument("wapk", nargs="?", help="열거나 설치할 .wapk TOML 파일")
     parser.add_argument("--install", action="store_true", help="GUI 없이 .wapk를 설치하고 종료")
@@ -176,3 +191,15 @@ def main(argv: list[str] | None = None) -> None:
     initial = Path(parsed.wapk).resolve() if parsed.wapk else None
     app = LauncherApp(initial)
     app.mainloop()
+
+
+def _enable_high_dpi() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass

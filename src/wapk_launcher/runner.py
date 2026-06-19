@@ -30,6 +30,9 @@ class AppRunner:
         if running.backend.poll() is not None:
             self.running.pop(app_id, None)
             return False
+        if running.webview is not None and running.webview.poll() is not None:
+            self.stop(app_id)
+            return False
         return True
 
     def start(self, manifest: WapkManifest) -> RunningApp:
