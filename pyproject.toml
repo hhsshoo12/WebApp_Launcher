@@ -1,0 +1,13 @@
+[project]
+name = "wapk-launcher"
+version = "0.1.0"
+description = "MVP launcher for WAPK local web apps"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+wapk-launcher = "wapk_launcher.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
