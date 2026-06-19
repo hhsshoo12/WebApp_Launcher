@@ -40,13 +40,20 @@ Use `.\build.ps1 -OneDir` to create a one-directory PyInstaller build instead.
 ## WAPK Example
 
 ```toml
+repository = "https://github.com/example/mini-timetable"
+ref = "main"
+```
+
+The launcher downloads the repository zip for `ref`, finds `metadata.toml`, and copies the app files by relative path.
+
+Repository `metadata.toml` example:
+
+```toml
 id = "mini-timetable"
 name = "Mini Timetable"
 version = "0.1.0"
-
-exe_url = "https://example.com/app.exe"
-html_url = "https://example.com/ui.html"
-
+app_exe = "dist/app.exe"
+app_html = "app.html"
 args = ["--port", "{PORT}"]
 port_range = [52000, 52500]
 ready_url = "http://127.0.0.1:{PORT}/health"

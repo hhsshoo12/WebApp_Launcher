@@ -18,10 +18,8 @@ def download_to(url: str, destination: Path) -> None:
     try:
         with tempfile.NamedTemporaryFile(delete=False, dir=destination.parent) as temp:
             temp_path = Path(temp.name)
-            if parsed.scheme in ("", "file"):
-                source = Path(unquote(parsed.path if parsed.scheme else url))
-                if parsed.netloc:
-                    source = Path(f"//{parsed.netloc}{unquote(parsed.path)}")
+            if _is_local_path(url, parsed.scheme):
+                source = _local_source_path(url, parsed)
                 with source.open("rb") as src:
                     shutil.copyfileobj(src, temp)
             elif parsed.scheme in ("http", "https"):
@@ -37,3 +35,15 @@ def download_to(url: str, destination: Path) -> None:
         if isinstance(exc, DownloadError):
             raise
         raise DownloadError(f"{url} 다운로드 실패: {exc}") from exc
+
+
+def _is_local_path(url: str, scheme: str) -> bool:
+    return scheme in ("", "file") or (len(scheme) == 1 and url[1:3] in (":\\", ":/"))
+
+
+def _local_source_path(url: str, parsed) -> Path:
+    if parsed.scheme == "file":
+        if parsed.netloc:
+            return Path(f"//{parsed.netloc}{unquote(parsed.path)}")
+        return Path(unquote(parsed.path))
+    return Path(url)

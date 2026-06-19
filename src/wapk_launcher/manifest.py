@@ -52,8 +52,12 @@ class WapkManifest:
     id: str
     name: str
     version: str
-    exe_url: str
-    html_url: str
+    exe_url: str | None
+    html_url: str | None
+    repository: str | None
+    ref: str
+    app_exe: str
+    app_html: str
     args: tuple[str, ...]
     port_range: tuple[int, int]
     ready_url: str | None
@@ -63,7 +67,18 @@ class WapkManifest:
     @classmethod
     def load(cls, path: Path) -> "WapkManifest":
         if zipfile.is_zipfile(path):
-            raise ManifestError("zip 기반 .wapk는 MVP에서 지원하지 않습니다. TOML 설정 파일 .wapk를 사용하세요.")
+            try:
+                with zipfile.ZipFile(path) as archive:
+                    metadata_name = _find_zip_metadata(archive)
+                    if metadata_name is None:
+                        raise ManifestError("zip .wapk 안에서 metadata.toml을 찾을 수 없습니다.")
+                    data = tomllib.loads(archive.read(metadata_name).decode("utf-8"))
+            except tomllib.TOMLDecodeError as exc:
+                raise ManifestError(f"metadata.toml 파싱 실패: {exc}") from exc
+            except UnicodeDecodeError as exc:
+                raise ManifestError(f"metadata.toml은 UTF-8 TOML이어야 합니다: {exc}") from exc
+            return cls.from_dict(data)
+
         try:
             data = tomllib.loads(path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
@@ -77,14 +92,29 @@ class WapkManifest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WapkManifest":
-        app_id = _required_str(data, "id")
+        repository = _optional_plain_str(data, "repository", None)
+        app_id = _optional_plain_str(data, "id", None)
+        if app_id is None:
+            name_for_id = _optional_plain_str(data, "name", None)
+            if name_for_id is not None:
+                app_id = _slugify(name_for_id)
+            elif repository is not None:
+                app_id = _slugify(Path(repository.rstrip("/").removesuffix(".git")).name)
+            else:
+                raise ManifestError("id는 필수 문자열입니다.")
         if not APP_ID_RE.fullmatch(app_id):
             raise ManifestError("id는 영문/숫자로 시작하고 영문, 숫자, _, ., - 만 사용할 수 있습니다.")
 
-        name = _required_str(data, "name")
-        version = _required_str(data, "version")
-        exe_url = _required_str(data, "exe_url")
-        html_url = _required_str(data, "html_url")
+        name = _optional_plain_str(data, "name", app_id)
+        version = _optional_plain_str(data, "version", "0.0.0")
+        exe_url = _optional_plain_str(data, "exe_url", None)
+        html_url = _optional_plain_str(data, "html_url", None)
+        ref = _optional_plain_str(data, "ref", "main")
+        app_exe = _optional_plain_str(data, "app_exe", "app.exe")
+        app_html = _optional_plain_str(data, "app_html", "app.html")
+
+        if repository is None and (exe_url is None or html_url is None):
+            raise ManifestError("repository 또는 exe_url/html_url 설정이 필요합니다.")
 
         raw_args = data.get("args", [])
         if not isinstance(raw_args, list) or not all(isinstance(item, str) for item in raw_args):
@@ -110,7 +140,6 @@ class WapkManifest:
         api_base = data.get("api_base", f"http://127.0.0.1:{PLACEHOLDER}")
         if not isinstance(api_base, str):
             raise ManifestError("api_base는 문자열이어야 합니다.")
-        window = WindowOptions.from_dict(data)
 
         return cls(
             id=app_id,
@@ -118,11 +147,15 @@ class WapkManifest:
             version=version,
             exe_url=exe_url,
             html_url=html_url,
+            repository=repository,
+            ref=ref,
+            app_exe=app_exe,
+            app_html=app_html,
             args=args,
             port_range=(port_start, port_end),
             ready_url=ready_url,
             api_base=api_base,
-            window=window,
+            window=WindowOptions.from_dict(data),
         )
 
     def to_toml(self) -> str:
@@ -130,13 +163,29 @@ class WapkManifest:
             f'id = "{_toml_escape(self.id)}"',
             f'name = "{_toml_escape(self.name)}"',
             f'version = "{_toml_escape(self.version)}"',
-            f'exe_url = "{_toml_escape(self.exe_url)}"',
-            f'html_url = "{_toml_escape(self.html_url)}"',
-            "",
-            "args = [" + ", ".join(f'"{_toml_escape(arg)}"' for arg in self.args) + "]",
-            f"port_range = [{self.port_range[0]}, {self.port_range[1]}]",
-            f'api_base = "{_toml_escape(self.api_base)}"',
         ]
+        if self.repository:
+            lines.extend(
+                [
+                    f'repository = "{_toml_escape(self.repository)}"',
+                    f'ref = "{_toml_escape(self.ref)}"',
+                    f'app_exe = "{_toml_escape(self.app_exe)}"',
+                    f'app_html = "{_toml_escape(self.app_html)}"',
+                ]
+            )
+        if self.exe_url:
+            lines.append(f'exe_url = "{_toml_escape(self.exe_url)}"')
+        if self.html_url:
+            lines.append(f'html_url = "{_toml_escape(self.html_url)}"')
+
+        lines.extend(
+            [
+                "",
+                "args = [" + ", ".join(f'"{_toml_escape(arg)}"' for arg in self.args) + "]",
+                f"port_range = [{self.port_range[0]}, {self.port_range[1]}]",
+                f'api_base = "{_toml_escape(self.api_base)}"',
+            ]
+        )
         if self.ready_url:
             lines.append(f'ready_url = "{_toml_escape(self.ready_url)}"')
         lines.extend(
@@ -163,10 +212,12 @@ class WapkManifest:
         return self.ready_url.replace(PLACEHOLDER, str(port))
 
 
-def _required_str(data: dict[str, Any], key: str) -> str:
-    value = data.get(key)
+def _optional_plain_str(data: dict[str, Any], key: str, default: str | None) -> str | None:
+    value = data.get(key, default)
+    if value is None:
+        return None
     if not isinstance(value, str) or not value.strip():
-        raise ManifestError(f"{key}는 필수 문자열입니다.")
+        raise ManifestError(f"{key}는 문자열이어야 합니다.")
     return value
 
 
@@ -196,3 +247,20 @@ def _toml_escape(value: str) -> str:
 
 def _toml_bool(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value.strip()).strip("-_.")
+    if not slug:
+        raise ManifestError("id를 자동 생성할 수 없습니다.")
+    if not slug[0].isalnum():
+        slug = f"app-{slug}"
+    return slug[:80]
+
+
+def _find_zip_metadata(archive: zipfile.ZipFile) -> str | None:
+    names = [name for name in archive.namelist() if not name.endswith("/")]
+    for name in names:
+        if Path(name).name.lower() == "metadata.toml":
+            return name
+    return None

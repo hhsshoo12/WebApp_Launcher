@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APPS_DIR = PROJECT_ROOT / "apps"
 RUST_WEBVIEW_DIR = PROJECT_ROOT / "rust" / "wapk-webview"
 
