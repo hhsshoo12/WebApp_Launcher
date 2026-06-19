@@ -55,7 +55,7 @@ class WapkManifest:
     name: str
     version: str
     mode: str
-    repository: str
+    repository: str | None
     ref: str
     app_exe: str | None
     app_html: str | None
@@ -94,25 +94,31 @@ class WapkManifest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WapkManifest":
+        mode = _optional_plain_str(data, "mode", "backend")
+        if mode not in APP_MODES:
+            raise ManifestError("mode는 backend, html, online 중 하나여야 합니다.")
+
         repository = _optional_plain_str(data, "repository", None)
-        if repository is None:
+        if repository is None and mode != "online":
             raise ManifestError('repository는 필수이며 "owner/repo" 형식이어야 합니다.')
-        repository = _normalize_repository(repository)
+        if repository is not None:
+            repository = _normalize_repository(repository)
+
         app_id = _optional_plain_str(data, "id", None)
         if app_id is None:
             name_for_id = _optional_plain_str(data, "name", None)
             if name_for_id is not None:
                 app_id = _slugify(name_for_id)
-            else:
+            elif repository is not None:
                 app_id = _slugify(repository.split("/", 1)[1])
+            else:
+                url_for_id = _optional_plain_str(data, "url", None)
+                app_id = _slugify(url_for_id or "online-app")
         if not APP_ID_RE.fullmatch(app_id):
             raise ManifestError("id는 영문/숫자로 시작하고 영문, 숫자, _, ., - 만 사용할 수 있습니다.")
 
         name = _optional_plain_str(data, "name", app_id)
         version = _optional_plain_str(data, "version", "0.0.0")
-        mode = _optional_plain_str(data, "mode", "backend")
-        if mode not in APP_MODES:
-            raise ManifestError("mode는 backend, html, online 중 하나여야 합니다.")
         ref = _optional_plain_str(data, "ref", "main")
         app_exe = _optional_plain_str(data, "app_exe", "app.exe" if mode == "backend" else None)
         app_html = _optional_plain_str(data, "app_html", "app.html" if mode in {"backend", "html"} else None)
@@ -173,12 +179,9 @@ class WapkManifest:
             f'version = "{_toml_escape(self.version)}"',
             f'mode = "{_toml_escape(self.mode)}"',
         ]
-        lines.extend(
-            [
-                f'repository = "{_toml_escape(self.repository)}"',
-                f'ref = "{_toml_escape(self.ref)}"',
-            ]
-        )
+        if self.repository is not None:
+            lines.append(f'repository = "{_toml_escape(self.repository)}"')
+            lines.append(f'ref = "{_toml_escape(self.ref)}"')
         if self.app_exe is not None:
             lines.append(f'app_exe = "{_toml_escape(self.app_exe)}"')
         if self.app_html is not None:

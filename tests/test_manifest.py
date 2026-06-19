@@ -76,9 +76,26 @@ url = "https://google.com"
         )
 
         self.assertEqual(manifest.mode, "online")
+        self.assertEqual(manifest.repository, "example/online-app")
         self.assertIsNone(manifest.app_exe)
         self.assertIsNone(manifest.app_html)
         self.assertEqual(manifest.url, "https://google.com")
+
+    def test_online_mode_does_not_require_repository(self) -> None:
+        manifest = WapkManifest.from_dict(
+            __import__("tomllib").loads(
+                """
+name = "Google"
+mode = "online"
+url = "https://google.com"
+"""
+            )
+        )
+
+        self.assertEqual(manifest.id, "Google")
+        self.assertIsNone(manifest.repository)
+        self.assertIn('url = "https://google.com"', manifest.to_toml())
+        self.assertNotIn("repository =", manifest.to_toml())
 
     def test_rejects_zip_wapk(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

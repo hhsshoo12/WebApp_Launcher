@@ -36,8 +36,8 @@ class WebAppCreator(ttk.Frame):
         form = ttk.Frame(self)
         form.pack(fill=tk.BOTH, expand=True)
         self._row(form, 0, "모드", self._mode_widget(form))
-        self._row(form, 1, "GitHub 저장소", ttk.Entry(form, textvariable=self.repository), "owner/repo")
-        self._row(form, 2, "브랜치/태그", ttk.Entry(form, textvariable=self.ref))
+        self.repository_row = self._row(form, 1, "GitHub 저장소", ttk.Entry(form, textvariable=self.repository), "owner/repo")
+        self.ref_row = self._row(form, 2, "브랜치/태그", ttk.Entry(form, textvariable=self.ref))
         self._row(form, 3, "앱 ID", ttk.Entry(form, textvariable=self.app_id), "비워두면 이름/저장소에서 자동 생성")
         self._row(form, 4, "앱 이름", ttk.Entry(form, textvariable=self.name))
         self._row(form, 5, "버전", ttk.Entry(form, textvariable=self.version))
@@ -79,6 +79,8 @@ class WebAppCreator(ttk.Frame):
 
     def _mode_changed(self) -> None:
         mode = self.mode.get()
+        self._show_row(self.repository_row, mode != "online")
+        self._show_row(self.ref_row, mode != "online")
         self._show_row(self.exe_row, mode == "backend")
         self._show_row(self.html_row, mode in {"backend", "html"})
         self._show_row(self.url_row, mode == "online")
@@ -113,7 +115,6 @@ class WebAppCreator(ttk.Frame):
         mode = self.mode.get()
         data: dict[str, object] = {
             "mode": mode,
-            "repository": self.repository.get(),
             "ref": self.ref.get(),
             "name": self.name.get(),
             "version": self.version.get(),
@@ -124,6 +125,8 @@ class WebAppCreator(ttk.Frame):
                 "level": self.window_level.get(),
             },
         }
+        if mode != "online":
+            data["repository"] = self.repository.get()
         if self.app_id.get().strip():
             data["id"] = self.app_id.get()
         if mode == "backend":

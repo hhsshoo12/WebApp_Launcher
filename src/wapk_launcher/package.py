@@ -14,6 +14,8 @@ from .processes import terminate_processes_by_executable
 
 
 def resolve_repository_manifest(manifest: WapkManifest) -> WapkManifest:
+    if manifest.repository is None:
+        return manifest
     with tempfile.TemporaryDirectory() as temp_dir:
         repo_root = _download_repository(manifest, Path(temp_dir))
         metadata_path = _find_metadata(repo_root)
@@ -28,6 +30,9 @@ def resolve_repository_manifest(manifest: WapkManifest) -> WapkManifest:
 
 
 def install_from_repository(manifest: WapkManifest) -> None:
+    if manifest.repository is None:
+        app_dir(manifest.id).mkdir(parents=True, exist_ok=True)
+        return
     with tempfile.TemporaryDirectory() as temp_dir:
         repo_root = _download_repository(manifest, Path(temp_dir))
         metadata_path = _find_metadata(repo_root)
@@ -56,6 +61,8 @@ def install_from_repository(manifest: WapkManifest) -> None:
 
 
 def _download_repository(manifest: WapkManifest, temp_dir: Path) -> Path:
+    if manifest.repository is None:
+        raise ManifestError('repository는 "owner/repo" 형식이어야 합니다.')
     archive_url = _repository_archive_url(manifest.repository, manifest.ref)
     archive_path = temp_dir / "repo.zip"
     extract_dir = temp_dir / "repo"
@@ -112,7 +119,6 @@ def _manifest_to_dict(manifest: WapkManifest) -> dict[str, object]:
         "name": manifest.name,
         "version": manifest.version,
         "mode": manifest.mode,
-        "repository": manifest.repository,
         "ref": manifest.ref,
         "args": list(manifest.args),
         "port_range": list(manifest.port_range),
@@ -124,6 +130,8 @@ def _manifest_to_dict(manifest: WapkManifest) -> dict[str, object]:
             "level": manifest.window.level,
         },
     }
+    if manifest.repository is not None:
+        data["repository"] = manifest.repository
     if manifest.app_exe is not None:
         data["app_exe"] = manifest.app_exe
     if manifest.app_html is not None:
