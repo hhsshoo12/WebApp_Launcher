@@ -40,7 +40,7 @@ Use `.\build.ps1 -OneDir` to create a one-directory PyInstaller build instead.
 ## WAPK Example
 
 ```toml
-repository = "https://github.com/example/mini-timetable"
+repository = "example/mini-timetable"
 ref = "main"
 ```
 

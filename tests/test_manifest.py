@@ -10,7 +10,7 @@ VALID_TOML = """
 id = "mini-timetable"
 name = "Mini Timetable"
 version = "0.1.0"
-repository = "https://github.com/example/mini-timetable"
+repository = "example/mini-timetable"
 ref = "main"
 app_exe = "dist/app.exe"
 app_html = "app.html"
@@ -36,7 +36,7 @@ class ManifestTests(unittest.TestCase):
             manifest = WapkManifest.load(path)
 
         self.assertEqual(manifest.id, "mini-timetable")
-        self.assertEqual(manifest.repository, "https://github.com/example/mini-timetable")
+        self.assertEqual(manifest.repository, "example/mini-timetable")
         self.assertEqual(manifest.app_exe, "dist/app.exe")
         self.assertEqual(manifest.app_html, "app.html")
         self.assertEqual(manifest.args_for_port(52001), ["--port", "52001"])
@@ -53,12 +53,18 @@ class ManifestTests(unittest.TestCase):
             with zipfile.ZipFile(path, "w") as archive:
                 archive.writestr(
                     "metadata.toml",
-                    "repository = 'https://github.com/example/legacy'\nref = 'main'\n",
+                    "repository = 'example/legacy'\nref = 'main'\n",
                 )
 
             manifest = WapkManifest.load(path)
 
-        self.assertEqual(manifest.repository, "https://github.com/example/legacy")
+        self.assertEqual(manifest.repository, "example/legacy")
+
+    def test_rejects_repository_url(self) -> None:
+        data = VALID_TOML.replace('repository = "example/mini-timetable"', 'repository = "https://github.com/example/mini-timetable"')
+
+        with self.assertRaises(ManifestError):
+            WapkManifest.from_dict(__import__("tomllib").loads(data))
 
     def test_rejects_invalid_port_range(self) -> None:
         data = VALID_TOML.replace("port_range = [52000, 52500]", "port_range = [52500, 52000]")

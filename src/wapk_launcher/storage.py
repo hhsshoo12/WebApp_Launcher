@@ -6,7 +6,6 @@ import shutil
 import tempfile
 import time
 import tomllib
-from urllib.parse import urlparse
 import zipfile
 
 from .downloader import download_to
@@ -23,8 +22,7 @@ class InstalledApp:
 
 
 def install_manifest(manifest: WapkManifest) -> InstalledApp:
-    if manifest.repository:
-        manifest = _resolve_repository_manifest(manifest)
+    manifest = _resolve_repository_manifest(manifest)
 
     directory = app_dir(manifest.id)
     directory.mkdir(parents=True, exist_ok=True)
@@ -35,13 +33,7 @@ def install_manifest(manifest: WapkManifest) -> InstalledApp:
         return InstalledApp(existing, directory, True)
 
     terminate_processes_by_executable(exe_path(manifest.id))
-    if manifest.repository:
-        _install_from_repository(manifest)
-    else:
-        if manifest.exe_url is None or manifest.html_url is None:
-            raise ManifestError("exe_url/html_url 설정이 필요합니다.")
-        download_to(manifest.exe_url, exe_path(manifest.id))
-        download_to(manifest.html_url, html_path(manifest.id))
+    _install_from_repository(manifest)
     target_manifest.write_text(manifest.to_toml(), encoding="utf-8")
     return InstalledApp(manifest, directory, True)
 
@@ -119,8 +111,6 @@ def _install_from_repository(manifest: WapkManifest) -> None:
 
 
 def _download_repository(manifest: WapkManifest, temp_dir: Path) -> Path:
-    if manifest.repository is None:
-        raise ManifestError("repository 설정이 필요합니다.")
     archive_url = _repository_archive_url(manifest.repository, manifest.ref)
     archive_path = temp_dir / "repo.zip"
     extract_dir = temp_dir / "repo"
@@ -139,17 +129,10 @@ def _download_repository(manifest: WapkManifest, temp_dir: Path) -> Path:
 
 
 def _repository_archive_url(repository: str, ref: str) -> str:
-    parsed = urlparse(repository)
-    if parsed.scheme in ("", "file") or repository.lower().endswith(".zip"):
-        return repository
-    if parsed.netloc.lower() != "github.com":
-        raise ManifestError(f"지원하지 않는 repository 호스트입니다: {parsed.netloc}")
-
-    parts = [part for part in parsed.path.strip("/").split("/") if part]
-    if len(parts) < 2:
-        raise ManifestError("GitHub repository URL은 owner/repo 형식이어야 합니다.")
-    owner = parts[0]
-    repo = parts[1].removesuffix(".git")
+    parts = repository.split("/", 1)
+    if len(parts) != 2:
+        raise ManifestError('repository는 "owner/repo" 형식이어야 합니다.')
+    owner, repo = parts
     return f"https://github.com/{owner}/{repo}/archive/{ref}.zip"
 
 
@@ -199,10 +182,6 @@ def _manifest_to_dict(manifest: WapkManifest) -> dict[str, object]:
     }
     if manifest.ready_url is not None:
         data["ready_url"] = manifest.ready_url
-    if manifest.exe_url is not None:
-        data["exe_url"] = manifest.exe_url
-    if manifest.html_url is not None:
-        data["html_url"] = manifest.html_url
     return data
 
 
