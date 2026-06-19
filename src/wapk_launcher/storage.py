@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import tempfile
+import time
 import tomllib
 from urllib.parse import urlparse
 import zipfile
@@ -11,6 +12,7 @@ import zipfile
 from .downloader import download_to
 from .manifest import ManifestError, WapkManifest
 from .paths import APPS_DIR, app_dir, exe_path, html_path, manifest_path
+from .processes import terminate_processes_by_executable
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ def install_manifest(manifest: WapkManifest) -> InstalledApp:
     if existing and existing.version == manifest.version and exe_path(manifest.id).exists() and html_path(manifest.id).exists():
         return InstalledApp(existing, directory, True)
 
+    terminate_processes_by_executable(exe_path(manifest.id))
     if manifest.repository:
         _install_from_repository(manifest)
     else:
@@ -69,7 +72,8 @@ def list_installed() -> list[InstalledApp]:
 def delete_app(app_id: str) -> None:
     directory = app_dir(app_id)
     if directory.exists():
-        shutil.rmtree(directory)
+        terminate_processes_by_executable(exe_path(app_id))
+        _remove_tree(directory)
 
 
 def _load_existing(path: Path) -> WapkManifest | None:
@@ -110,7 +114,7 @@ def _install_from_repository(manifest: WapkManifest) -> None:
             raise ManifestError(f"metadata.toml의 app_html 파일을 찾을 수 없습니다: {manifest.app_html}")
 
         app_dir(manifest.id).mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_exe, exe_path(manifest.id))
+        _copy_file(source_exe, exe_path(manifest.id))
         shutil.copy2(source_html, html_path(manifest.id))
 
 
@@ -200,3 +204,33 @@ def _manifest_to_dict(manifest: WapkManifest) -> dict[str, object]:
     if manifest.html_url is not None:
         data["html_url"] = manifest.html_url
     return data
+
+
+def _copy_file(source: Path, destination: Path) -> None:
+    last_error: OSError | None = None
+    for _ in range(10):
+        try:
+            shutil.copy2(source, destination)
+            return
+        except OSError as exc:
+            last_error = exc
+            if getattr(exc, "winerror", None) != 32:
+                raise
+            terminate_processes_by_executable(destination)
+            time.sleep(0.2)
+    raise ManifestError(f"파일을 덮어쓸 수 없습니다. 실행 중인 프로세스를 종료한 뒤 다시 시도하세요: {destination}") from last_error
+
+
+def _remove_tree(directory: Path) -> None:
+    last_error: OSError | None = None
+    for _ in range(10):
+        try:
+            shutil.rmtree(directory)
+            return
+        except OSError as exc:
+            last_error = exc
+            if getattr(exc, "winerror", None) != 32:
+                raise
+            terminate_processes_by_executable(directory / "app.exe")
+            time.sleep(0.2)
+    raise ManifestError(f"앱 폴더를 삭제할 수 없습니다. 실행 중인 프로세스를 종료한 뒤 다시 시도하세요: {directory}") from last_error
