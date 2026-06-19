@@ -37,6 +37,13 @@ dist/wapk-launcher.exe
 
 Use `.\build.ps1 -OneDir` to create a one-directory PyInstaller build instead.
 
+## Settings
+
+The launcher has a `설정` tab with global runtime options:
+
+- `콘솔이 존재한다면 띄우기`: when off, backend app consoles are hidden even if the app is a console executable.
+- `브라우저 콘솔 띄우기`: opens WebView devtools for launched apps.
+
 ## WAPK Example
 
 ```toml

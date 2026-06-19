@@ -16,6 +16,7 @@ struct Args {
     fullscreen: bool,
     transparent: bool,
     window_level: WindowLevel,
+    devtools: bool,
 }
 
 struct App {
@@ -50,9 +51,14 @@ impl ApplicationHandler for App {
 
         let webview = WebViewBuilder::new()
             .with_transparent(self.options.transparent)
+            .with_devtools(self.options.devtools)
             .with_html(&self.html)
             .build(&window)
             .expect("failed to build webview");
+
+        if self.options.devtools {
+            webview.open_devtools();
+        }
 
         self.webview = Some(webview);
         self.window = Some(window);
@@ -106,6 +112,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut fullscreen = false;
     let mut transparent = false;
     let mut window_level = WindowLevel::Normal;
+    let mut devtools = false;
 
     let mut iter = env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -120,6 +127,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
             "--borderless" => borderless = true,
             "--fullscreen" => fullscreen = true,
             "--transparent" => transparent = true,
+            "--devtools" => devtools = true,
             "--window-level" => {
                 let value = iter.next().ok_or("--window-level requires a value")?;
                 window_level = parse_window_level(&value)?;
@@ -136,6 +144,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         fullscreen,
         transparent,
         window_level,
+        devtools,
     })
 }
 

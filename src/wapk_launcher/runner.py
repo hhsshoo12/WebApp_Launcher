@@ -9,6 +9,7 @@ from urllib.request import urlopen
 from .manifest import WapkManifest
 from .paths import exe_path, html_path
 from .ports import find_free_port
+from .settings import GlobalSettings
 from .webview import launch_webview
 
 
@@ -21,9 +22,10 @@ class RunningApp:
 
 
 class AppRunner:
-    def __init__(self) -> None:
+    def __init__(self, settings: GlobalSettings | None = None) -> None:
         self.running: dict[str, RunningApp] = {}
         self.lock = RLock()
+        self.settings = settings or GlobalSettings.load()
 
     def is_running(self, app_id: str) -> bool:
         with self.lock:
@@ -47,7 +49,7 @@ class AppRunner:
         backend = subprocess.Popen(
             [str(exe_path(manifest.id)), *manifest.args_for_port(port)],
             cwd=exe_path(manifest.id).parent,
-            creationflags=_backend_creation_flags(),
+            creationflags=_backend_creation_flags(self.settings),
         )
 
         try:
@@ -59,7 +61,13 @@ class AppRunner:
                 "port": port,
                 "apiBase": manifest.api_base_for_port(port),
             }
-            webview = launch_webview(html_path(manifest.id), runtime, manifest.name, manifest.window)
+            webview = launch_webview(
+                html_path(manifest.id),
+                runtime,
+                manifest.name,
+                manifest.window,
+                self.settings,
+            )
         except Exception:
             _terminate(backend)
             raise
@@ -121,7 +129,7 @@ def _terminate(process: subprocess.Popen) -> None:
         process.wait(timeout=3)
 
 
-def _backend_creation_flags() -> int:
-    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+def _backend_creation_flags(settings: GlobalSettings) -> int:
+    if not settings.show_backend_console and hasattr(subprocess, "CREATE_NO_WINDOW"):
         return subprocess.CREATE_NO_WINDOW
     return 0

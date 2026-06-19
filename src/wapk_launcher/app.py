@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .manifest import ManifestError, WapkManifest
 from .runner import AppRunner
+from .settings import GlobalSettings
 from .storage import InstalledApp, delete_app, install_manifest, list_installed
 
 
@@ -19,7 +20,8 @@ class LauncherApp(tk.Tk):
         self.title("WAPK Launcher")
         self.geometry("760x460")
         self.minsize(680, 380)
-        self.runner = AppRunner()
+        self.settings = GlobalSettings.load()
+        self.runner = AppRunner(self.settings)
         self.apps: list[InstalledApp] = []
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="wapk-worker")
         self.busy_count = 0
@@ -33,8 +35,13 @@ class LauncherApp(tk.Tk):
             self.after(100, lambda: self.install_wapk(initial_wapk, run_after=True))
 
     def _build_ui(self) -> None:
-        root = ttk.Frame(self, padding=12)
-        root.pack(fill=tk.BOTH, expand=True)
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        root = ttk.Frame(notebook, padding=12)
+        settings_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(root, text="앱")
+        notebook.add(settings_tab, text="설정")
 
         self.tree = ttk.Treeview(
             root,
@@ -69,6 +76,28 @@ class LauncherApp(tk.Tk):
 
         self.status = tk.StringVar(value="준비됨")
         ttk.Label(root, textvariable=self.status, anchor=tk.W).pack(fill=tk.X, pady=(10, 0))
+
+        self.show_backend_console = tk.BooleanVar(value=self.settings.show_backend_console)
+        self.show_browser_console = tk.BooleanVar(value=self.settings.show_browser_console)
+        ttk.Checkbutton(
+            settings_tab,
+            text="콘솔이 존재한다면 띄우기",
+            variable=self.show_backend_console,
+            command=self._save_settings,
+        ).pack(anchor=tk.W)
+        ttk.Checkbutton(
+            settings_tab,
+            text="브라우저 콘솔 띄우기",
+            variable=self.show_browser_console,
+            command=self._save_settings,
+        ).pack(anchor=tk.W, pady=(8, 0))
+
+    def _save_settings(self) -> None:
+        self.settings.show_backend_console = bool(self.show_backend_console.get())
+        self.settings.show_browser_console = bool(self.show_browser_console.get())
+        self.settings.save()
+        self.runner.settings = self.settings
+        self.status.set("설정 저장됨")
 
     def pick_wapk(self) -> None:
         file_name = filedialog.askopenfilename(
@@ -230,7 +259,7 @@ def main(argv: list[str] | None = None) -> None:
         installed = install_manifest(manifest)
         print(f"installed {installed.manifest.id} {installed.manifest.version}")
         if parsed.run:
-            runner = AppRunner()
+            runner = AppRunner(GlobalSettings.load())
             try:
                 running = runner.start(installed.manifest)
                 print(f"running {installed.manifest.id} port={running.port}")

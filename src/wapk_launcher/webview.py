@@ -7,6 +7,7 @@ import sys
 
 from .paths import PROJECT_ROOT, RUST_WEBVIEW_DIR
 from .manifest import WindowOptions
+from .settings import GlobalSettings
 
 
 class WebViewError(RuntimeError):
@@ -18,6 +19,7 @@ def launch_webview(
     runtime: dict[str, object],
     title: str,
     window: WindowOptions,
+    settings: GlobalSettings,
 ) -> subprocess.Popen:
     binary = _ensure_webview_binary()
     command = [
@@ -31,6 +33,8 @@ def launch_webview(
         "--window-level",
         window.level,
     ]
+    if settings.show_browser_console:
+        command.append("--devtools")
     if window.borderless:
         command.append("--borderless")
     if window.fullscreen:
