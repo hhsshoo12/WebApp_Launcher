@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from concurrent.futures import Future, ThreadPoolExecutor
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -16,6 +17,7 @@ class LauncherApp(tk.Tk):
     def __init__(self, initial_wapk: Path | None = None) -> None:
         super().__init__()
         self.title("WAPK Launcher")
+        self._set_app_icon()
         self.geometry("760x460")
         self.minsize(680, 380)
         self.settings = GlobalSettings.load()
@@ -241,6 +243,24 @@ class LauncherApp(tk.Tk):
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.destroy()
 
+    def _set_app_icon(self) -> None:
+        for icon_path in _icon_candidates():
+            if not icon_path.exists():
+                continue
+            try:
+                self.iconbitmap(str(icon_path))
+                return
+            except tk.TclError:
+                continue
+
 
 # 하위 호환성을 위해 CLI 엔트리포인트를 가져와 노출합니다.
 from .cli import main
+
+
+def _icon_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(getattr(sys, "_MEIPASS", "")) / "assets" / "app.ico")
+    candidates.append(Path(__file__).resolve().parents[2] / "assets" / "app.ico")
+    return candidates

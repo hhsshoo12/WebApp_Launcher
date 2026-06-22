@@ -16,6 +16,7 @@ $DistDir = Join-Path $ProjectRoot "dist"
 $BuildDir = Join-Path $ProjectRoot "build"
 $SpecFile = Join-Path $ProjectRoot "wapk-launcher.spec"
 $EntryPoint = Join-Path $ProjectRoot "packaging\pyinstaller_entry.py"
+$IconFile = Join-Path $ProjectRoot "assets\app.ico"
 
 function Require-Command {
     param([string]$Name)
@@ -60,9 +61,20 @@ if (-not (Test-Path -LiteralPath $RustExe)) {
 $WebView2Loader = Get-ChildItem `
     -Path (Join-Path $RustTargetDir "release\build") `
     -Recurse `
+    -ErrorAction SilentlyContinue `
     -Filter "WebView2Loader.dll" |
     Where-Object { $_.FullName -match "\\x64\\WebView2Loader\.dll$" } |
     Select-Object -First 1 -ExpandProperty FullName
+
+if (-not $WebView2Loader) {
+    $WebView2Loader = Get-ChildItem `
+        -Path $RustProject, (Join-Path $env:USERPROFILE ".cargo"), (Join-Path $env:USERPROFILE "scoop\persist\rustup\.cargo") `
+        -Recurse `
+        -ErrorAction SilentlyContinue `
+        -Filter "WebView2Loader.dll" |
+        Where-Object { $_.FullName -match "\\x64\\WebView2Loader\.dll$" } |
+        Select-Object -First 1 -ExpandProperty FullName
+}
 
 if (-not $WebView2Loader) {
     throw "WebView2Loader.dll was not found in the Rust build output."
@@ -78,6 +90,7 @@ $PyInstallerMode = if ($OneDir) { "--onedir" } else { "--onefile" }
 $WindowMode = "--windowed"
 $AddRustExe = "$RustExe;."
 $AddWebView2Loader = "$WebView2Loader;."
+$AddIcon = "$IconFile;assets"
 
 Write-Host "Building launcher executable with PyInstaller..."
 Invoke-Native uv run --project $ProjectRoot --with pyinstaller pyinstaller `
@@ -86,9 +99,11 @@ Invoke-Native uv run --project $ProjectRoot --with pyinstaller pyinstaller `
     $PyInstallerMode `
     $WindowMode `
     --name wapk-launcher `
+    --icon $IconFile `
     --paths (Join-Path $ProjectRoot "src") `
     --add-binary $AddRustExe `
     --add-binary $AddWebView2Loader `
+    --add-data $AddIcon `
     $EntryPoint
 
 if ($OneDir) {
