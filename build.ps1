@@ -9,7 +9,8 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvPath = "A:\Dev\.venv"
 $RustProject = Join-Path $ProjectRoot "rust\wapk-webview"
-$RustExe = Join-Path $RustProject "target\release\wapk-webview.exe"
+$RustTargetDir = Join-Path $env:TEMP "wapk-webview-target"
+$RustExe = Join-Path $RustTargetDir "release\wapk-webview.exe"
 $WebView2Loader = $null
 $DistDir = Join-Path $ProjectRoot "dist"
 $BuildDir = Join-Path $ProjectRoot "build"
@@ -47,6 +48,7 @@ if ($Clean) {
 }
 
 $env:UV_PROJECT_ENVIRONMENT = $VenvPath
+$env:CARGO_TARGET_DIR = $RustTargetDir
 
 Write-Host "Building Rust WebView helper..."
 Invoke-Native cargo build --manifest-path (Join-Path $RustProject "Cargo.toml") --release
@@ -56,7 +58,7 @@ if (-not (Test-Path -LiteralPath $RustExe)) {
 }
 
 $WebView2Loader = Get-ChildItem `
-    -Path (Join-Path $RustProject "target\release\build") `
+    -Path (Join-Path $RustTargetDir "release\build") `
     -Recurse `
     -Filter "WebView2Loader.dll" |
     Where-Object { $_.FullName -match "\\x64\\WebView2Loader\.dll$" } |
