@@ -155,7 +155,7 @@ function renderProcessManager() {
         <div class="pid"><code>${escapeHtml(proc.processId ?? "—")}</code><small>${escapeHtml(proc.processName ?? "")}</small></div>
         <div class="row-actions">
           <button class="icon-button" type="button" title="로그 폴 열기" aria-label="로그 폴 열기" data-process-action="open-log" data-key="${key}">${icon("folder")}</button>
-          <button class="icon-button delete" type="button" title="프로세스 종료" aria-label="프로세스 종료" data-process-action="kill" data-key="${key}">${icon("trash")}</button>
+          <button class="icon-button delete" type="button" title="프로세스 종료" aria-label="프로세스 종료" data-process-action="kill" data-key="${key}">${icon("x")}</button>
         </div>
       </article>`;
   }).join("");
@@ -305,7 +305,6 @@ document.addEventListener("click", (event) => {
     if (action === "confirm-kill" && state.selected) {
       post(commandFor(state.selected, "killProcess"));
       closeModal();
-      setBusy(true, "프로세스를 종료하는 중입니다.");
     }
     return;
   }

@@ -19,7 +19,7 @@ public partial class MainWindow : Window
     private readonly AppLauncher launcher;
     private readonly LauncherSettingsStore settingsStore;
     private LauncherSettings settings;
-    private readonly List<LaunchResult> activeLaunches = [];
+    private readonly List<ActiveSession> activeSessions = [];
 
     public MainWindow()
     {
@@ -184,7 +184,9 @@ public partial class MainWindow : Window
     {
         var app = ResolveApp(command);
         var result = launcher.Launch(app);
-        activeLaunches.Add(result);
+        var window = new AppWindow(result, settings.DeveloperMode);
+        var session = new ActiveSession(result, window);
+        activeSessions.Add(session);
 
         if (result.Process is not null)
         {
@@ -192,15 +194,14 @@ public partial class MainWindow : Window
             result.Process.Exited += (_, _) =>
                 Dispatcher.BeginInvoke(() =>
                 {
-                    activeLaunches.Remove(result);
+                    activeSessions.Remove(session);
                     SendProcessManagerState();
                 });
         }
 
-        var window = new AppWindow(result, settings.DeveloperMode);
         window.Closed += (_, _) =>
         {
-            activeLaunches.Remove(result);
+            activeSessions.Remove(session);
             SendProcessManagerState();
         };
         window.Show();
@@ -274,40 +275,34 @@ public partial class MainWindow : Window
     private void KillProcess(LauncherCommand command)
     {
         var app = ResolveApp(command);
-        var launch = activeLaunches.FirstOrDefault(l =>
-            l.App.Manifest.Package.Id.Equals(app.Manifest.Package.Id, StringComparison.OrdinalIgnoreCase) &&
-            l.App.Manifest.Package.Version.Equals(app.Manifest.Package.Version, StringComparison.OrdinalIgnoreCase));
-        if (launch is null)
+        var session = activeSessions.FirstOrDefault(s =>
+            s.Launch.App.Manifest.Package.Id.Equals(app.Manifest.Package.Id, StringComparison.OrdinalIgnoreCase) &&
+            s.Launch.App.Manifest.Package.Version.Equals(app.Manifest.Package.Version, StringComparison.OrdinalIgnoreCase));
+        if (session is null)
         {
             throw new InvalidOperationException("실행 중인 프로세스를 찾을 수 없습니다.");
         }
 
-        if (launch.Process is { HasExited: false } process)
-        {
-            process.Kill(entireProcessTree: true);
-        }
-
-        activeLaunches.Remove(launch);
-        launch.ReleasePort();
-        SendProcessManagerState();
+        session.Window.Close();
+        Send(new { type = "idle" });
     }
 
     private void SendProcessManagerState()
     {
         var occupiedPorts = PortManager.GetOccupiedPorts();
-        var processes = activeLaunches
-            .Where(l => l.Process is not null)
-            .Select(l => new
+        var processes = activeSessions
+            .Where(s => s.Launch.Process is not null)
+            .Select(s => new
             {
-                packageId = l.App.Manifest.Package.Id,
-                name = l.App.Manifest.Package.Name,
-                version = l.App.Manifest.Package.Version,
-                runtime = DescribeRuntime(l.App.Manifest.Runtime),
-                mode = l.App.Manifest.Entry.Mode ?? "static",
-                port = l.Port,
-                processId = l.Process!.Id,
-                processName = l.Process.ProcessName,
-                logPath = l.LogPath
+                packageId = s.Launch.App.Manifest.Package.Id,
+                name = s.Launch.App.Manifest.Package.Name,
+                version = s.Launch.App.Manifest.Package.Version,
+                runtime = DescribeRuntime(s.Launch.App.Manifest.Runtime),
+                mode = s.Launch.App.Manifest.Entry.Mode ?? "static",
+                port = s.Launch.Port,
+                processId = s.Launch.Process!.Id,
+                processName = s.Launch.Process.ProcessName,
+                logPath = s.Launch.LogPath
             })
             .ToArray();
 
@@ -447,4 +442,6 @@ public partial class MainWindow : Window
         string? PackageId = null,
         string? Version = null,
         bool? Enabled = null);
+
+    private sealed record ActiveSession(LaunchResult Launch, AppWindow Window);
 }
