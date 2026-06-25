@@ -1,12 +1,16 @@
 const host = window.chrome?.webview;
 const state = {
+  view: "apps",
   apps: [],
   root: "",
   query: "",
   selected: null,
-  settings: { developerMode: false, ports: null },
+  settings: { developerMode: false },
+  doctorItems: null,
   licenses: { project: "", thirdParty: "" },
-  activeLicense: "project"
+  activeLicense: "project",
+  processes: [],
+  processPorts: { occupied: 0, total: 1000, percent: 0, values: [] }
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -15,6 +19,8 @@ const emptyState = $("#empty-state");
 const busyLayer = $("#busy-layer");
 const modalBackdrop = $("#modal-backdrop");
 const settingsBackdrop = $("#settings-backdrop");
+const appLibraryView = $("#app-library-view");
+const processManagerView = $("#process-manager-view");
 
 function icon(name) {
   return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
@@ -45,7 +51,31 @@ function appInitial(name) {
   return [...String(name || "W").trim()][0]?.toUpperCase() || "W";
 }
 
+function setView(name) {
+  state.view = name;
+  appLibraryView.hidden = name !== "apps";
+  processManagerView.hidden = name !== "processes";
+  $(".nav-item")?.classList.toggle("active", name === "apps");
+  document.querySelectorAll("[data-action='process-manager']").forEach((button) => {
+    button.classList.toggle("active", name === "processes");
+  });
+  if (name === "processes") {
+    post({ type: "processManager" });
+  }
+  setStatus(name === "apps"
+    ? `${state.apps.length}개의 앱이 준비되어 있습니다.`
+    : "프로세스 관리자");
+}
+
 function render() {
+  if (state.view === "apps") {
+    renderAppLibrary();
+  } else {
+    renderProcessManager();
+  }
+}
+
+function renderAppLibrary() {
   const query = state.query.trim().toLocaleLowerCase();
   const apps = state.apps.filter((app) =>
     [app.name, app.packageId, app.version, app.port, app.runtime]
@@ -73,7 +103,7 @@ function render() {
         <div class="port"><span>${escapeHtml(app.port)}</span></div>
         <div class="row-actions">
           <button class="secondary-button run-button" type="button" data-row-action="run">${icon("play")}실행</button>
-          <button class="icon-button" type="button" title="데이터 폴더 열기" aria-label="데이터 폴더 열기" data-row-action="open-data">${icon("folder")}</button>
+          <button class="icon-button" type="button" title="데이터 폴 열기" aria-label="데이터 폴 열기" data-row-action="open-data">${icon("folder")}</button>
           <button class="icon-button delete" type="button" title="앱 삭제" aria-label="앱 삭제" data-row-action="remove">${icon("trash")}</button>
         </div>
       </article>`;
@@ -92,6 +122,46 @@ function render() {
     emptyState.querySelector("p").textContent = ".wapk 설치 레시피를 선택하면 전용 환경에 앱을 준비합니다.";
     emptyState.querySelector("button").hidden = false;
   }
+}
+
+function renderProcessManager() {
+  const ports = state.processPorts ?? { occupied: 0, total: 1000, percent: 0, values: [] };
+  $("#pm-port-count").textContent = ports.occupied;
+  $("#pm-port-fill").style.width = `${Math.min(100, ports.percent)}%`;
+  $("#pm-port-summary").textContent = ports.occupied === 0
+    ? "현재 점유된 런처 포트가 없습니다."
+    : `${ports.occupied}개 사용 중 · ${ports.total - ports.occupied}개 사용 가능`;
+  $("#pm-port-list").innerHTML = ports.values.length
+    ? ports.values.map((port) => `<code>${escapeHtml(port)}</code>`).join("")
+    : '<span class="settings-empty-inline">점유 포트 없음</span>';
+
+  const processList = $("#process-list");
+  const processEmpty = $("#process-empty");
+  const processes = state.processes ?? [];
+
+  processList.innerHTML = processes.map((proc) => {
+    const key = escapeHtml(appKey(proc));
+    return `
+      <article class="app-row process-row" data-key="${key}">
+        <div class="app-identity">
+          <div class="app-icon">${escapeHtml(appInitial(proc.name))}</div>
+          <div class="app-copy">
+            <div class="app-name">${escapeHtml(proc.name)} <span class="app-version">${escapeHtml(proc.version)}</span></div>
+            <div class="app-package">${escapeHtml(proc.packageId)}</div>
+          </div>
+        </div>
+        <div class="runtime"><b>${escapeHtml(proc.mode === "server" ? "Backend" : "Static")}</b>${escapeHtml(proc.runtime || "런타임 없음")}</div>
+        <div class="port"><span>${escapeHtml(proc.port ?? "—")}</span></div>
+        <div class="pid"><code>${escapeHtml(proc.processId ?? "—")}</code><small>${escapeHtml(proc.processName ?? "")}</small></div>
+        <div class="row-actions">
+          <button class="icon-button" type="button" title="로그 폴 열기" aria-label="로그 폴 열기" data-process-action="open-log" data-key="${key}">${icon("folder")}</button>
+          <button class="icon-button delete" type="button" title="프로세스 종료" aria-label="프로세스 종료" data-process-action="kill" data-key="${key}">${icon("trash")}</button>
+        </div>
+      </article>`;
+  }).join("");
+
+  processEmpty.hidden = processes.length > 0;
+  processList.hidden = processes.length === 0;
 }
 
 function setBusy(active, message = "처리하는 중입니다.") {
@@ -134,17 +204,18 @@ function showRemove(app) {
   openModal({
     eyebrow: "REMOVE APP",
     title: `${app.name} 삭제`,
-    content: `<p><strong>${escapeHtml(app.packageId)}/${escapeHtml(app.version)}</strong>의 소스, 데이터, 로그와 의존성을 모두 삭제합니다.</p><p class="warning">이 작업은 앱의 <code>data/</code> 폴더도 삭제하며 되돌릴 수 없습니다.</p>`,
+    content: `<p><strong>${escapeHtml(app.packageId)}/${escapeHtml(app.version)}</strong>의 소스, 데이터, 로그와 의존성을 모두 삭제합니다.</p><p class="warning">이 작업은 앱의 <code>data/</code> 폴어도 삭제하며 되돌릴 수 없습니다.</p>`,
     actions: `<button class="secondary-button" type="button" data-action="close-modal">취소</button><button class="primary-button danger-button" type="button" data-action="confirm-remove">${icon("trash")}삭제</button>`
   });
 }
 
-function showDoctor(items) {
+function showKillProcess(proc) {
+  state.selected = proc;
   openModal({
-    eyebrow: "RUNTIME STATUS",
-    title: "환경 진단",
-    content: `<div class="doctor-list">${items.map((item) => `<div class="doctor-item">${escapeHtml(item)}</div>`).join("")}</div>`,
-    actions: `<button class="primary-button" type="button" data-action="close-modal">확인</button>`
+    eyebrow: "KILL PROCESS",
+    title: `${proc.name} 프로세스 종료`,
+    content: `<p><strong>${escapeHtml(proc.packageId)}/${escapeHtml(proc.version)}</strong>의 백엔드 프로세스(PID ${escapeHtml(proc.processId)})를 종료합니다.</p><p class="warning">프로세스를 종료하면 실행 중인 앱 창도 함께 닫힙니다.</p>`,
+    actions: `<button class="secondary-button" type="button" data-action="close-modal">취소</button><button class="primary-button danger-button" type="button" data-action="confirm-kill">${icon("trash")}종료</button>`
   });
 }
 
@@ -153,6 +224,7 @@ function openSettings() {
   settingsBackdrop.querySelector("button")?.focus();
   post({ type: "settings" });
   post({ type: "licenses" });
+  post({ type: "doctor" });
 }
 
 function closeSettings() {
@@ -169,16 +241,17 @@ function selectSettingsTab(name) {
 }
 
 function renderSettings() {
-  const ports = state.settings.ports ?? { occupied: 0, total: 1000, percent: 0, values: [] };
-  $("#settings-port-count").textContent = ports.occupied;
-  $("#settings-port-fill").style.width = `${Math.min(100, ports.percent)}%`;
-  $("#settings-port-summary").textContent = ports.occupied === 0
-    ? "현재 점유된 런처 포트가 없습니다."
-    : `${ports.occupied}개 사용 중 · ${ports.total - ports.occupied}개 사용 가능`;
-  $("#settings-port-list").innerHTML = ports.values.length
-    ? ports.values.map((port) => `<code>${escapeHtml(port)}</code>`).join("")
-    : '<span class="settings-empty-inline">점유 포트 없음</span>';
   $("#developer-mode-toggle").checked = Boolean(state.settings.developerMode);
+}
+
+function renderDoctor() {
+  const container = $("#doctor-results");
+  const items = state.doctorItems;
+  if (!items) {
+    container.innerHTML = '<div class="settings-empty">아직 진단을 실행하지 않았습니다.</div>';
+    return;
+  }
+  container.innerHTML = `<div class="doctor-list">${items.map((item) => `<div class="doctor-item">${escapeHtml(item)}</div>`).join("")}</div>`;
 }
 
 function renderRuntimeResults(items) {
@@ -212,8 +285,15 @@ document.addEventListener("click", (event) => {
   if (actionButton) {
     const action = actionButton.dataset.action;
     if (action === "install") post({ type: "install" });
-    if (action === "refresh") post({ type: "refresh" });
-    if (action === "doctor") post({ type: "doctor" });
+    if (action === "refresh") {
+      post({ type: "refresh" });
+      setBusy(true, "앱 목록을 새로 고치는 중입니다.");
+    }
+    if (action === "process-manager") {
+      setView(state.view === "processes" ? "apps" : "processes");
+      return;
+    }
+    if (action === "refresh-processes") post({ type: "processManager" });
     if (action === "open-root") post({ type: "openRoot" });
     if (action === "settings") openSettings();
     if (action === "close-modal") closeModal();
@@ -222,17 +302,42 @@ document.addEventListener("click", (event) => {
       closeModal();
       setBusy(true, "앱을 삭제하는 중입니다.");
     }
+    if (action === "confirm-kill" && state.selected) {
+      post(commandFor(state.selected, "killProcess"));
+      closeModal();
+      setBusy(true, "프로세스를 종료하는 중입니다.");
+    }
+    return;
+  }
+
+  const navButton = event.target.closest("[data-view]");
+  if (navButton) {
+    setView(navButton.dataset.view);
     return;
   }
 
   const rowButton = event.target.closest("[data-row-action]");
-  if (!rowButton) return;
-  const app = findApp(rowButton.closest(".app-row").dataset.key);
-  if (!app) return;
-  const action = rowButton.dataset.rowAction;
-  if (action === "run") post(commandFor(app, "run"));
-  if (action === "open-data") post(commandFor(app, "openData"));
-  if (action === "remove") showRemove(app);
+  if (rowButton) {
+    const app = findApp(rowButton.closest(".app-row").dataset.key);
+    if (!app) return;
+    const action = rowButton.dataset.rowAction;
+    if (action === "run") post(commandFor(app, "run"));
+    if (action === "open-data") post(commandFor(app, "openData"));
+    if (action === "remove") showRemove(app);
+    return;
+  }
+
+  const processButton = event.target.closest("[data-process-action]");
+  if (processButton) {
+    const key = processButton.dataset.key;
+    const proc = state.processes.find((p) => appKey(p) === key);
+    if (!proc) return;
+    const action = processButton.dataset.processAction;
+    if (action === "open-log") {
+      post({ type: "openLog", packageId: proc.packageId, version: proc.version });
+    }
+    if (action === "kill") showKillProcess(proc);
+  }
 });
 
 settingsBackdrop.addEventListener("click", (event) => {
@@ -251,6 +356,12 @@ settingsBackdrop.addEventListener("click", (event) => {
   if (event.target.closest("[data-runtime-check]")) {
     $("#runtime-results").innerHTML = '<div class="settings-empty">버전을 확인하는 중입니다.</div>';
     post({ type: "checkRuntimeUpdates" });
+    return;
+  }
+
+  if (event.target.closest("[data-doctor-check]")) {
+    $("#doctor-results").innerHTML = '<div class="settings-empty">진단을 실행하는 중입니다.</div>';
+    post({ type: "doctor" });
     return;
   }
 
@@ -287,7 +398,15 @@ if (host) {
     }
     if (data.type === "busy") setBusy(true, data.message);
     if (data.type === "idle") setBusy(false);
-    if (data.type === "doctor") showDoctor(data.items ?? []);
+    if (data.type === "processManager") {
+      state.processPorts = data.ports ?? state.processPorts;
+      state.processes = data.processes ?? [];
+      if (state.view === "processes") render();
+    }
+    if (data.type === "doctor") {
+      state.doctorItems = data.items ?? [];
+      renderDoctor();
+    }
     if (data.type === "settings") {
       state.settings = data;
       renderSettings();
@@ -317,6 +436,11 @@ if (host) {
     { packageId: "studio@note-grid", name: "Note Grid", version: "2.4", runtime: "nodejs-lts-24", mode: "server", port: "자동" },
     { packageId: "local@status-board", name: "Status Board", version: "1.3", runtime: "", mode: "static", port: "없음" }
   ];
+  state.processes = [
+    { packageId: "hhsshoo12@webapp-test", name: "WebApp Test", version: "1.0", runtime: "python313", mode: "server", port: 52001, processId: 1234, processName: "python.exe", logPath: "C:\\Users\\user\\.webapp\\app\\...\\logs\\...log" },
+    { packageId: "studio@note-grid", name: "Note Grid", version: "2.4", runtime: "nodejs-lts-24", mode: "server", port: 52002, processId: 5678, processName: "node.exe", logPath: "C:\\Users\\user\\.webapp\\app\\...\\logs\\...log" }
+  ];
+  state.processPorts = { occupied: 2, total: 1000, percent: 0.2, values: [52001, 52002] };
   setStatus("미리보기 모드");
   render();
 }

@@ -15,6 +15,7 @@
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
     <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5-5L12 3.6 9.6 6 7.3 3.7a4 4 0 0 0 5 5L20 16.4a2.1 2.1 0 0 1-3 3Z"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
@@ -30,7 +31,7 @@
       </div>
 
       <nav aria-label="런처 메뉴">
-        <button class="nav-item active" type="button">
+        <button class="nav-item active" type="button" data-view="apps">
           <svg class="icon"><use href="#i-box"></use></svg>
           설치된 앱
           <span id="nav-count" class="nav-count">0</span>
@@ -38,8 +39,8 @@
       </nav>
 
       <div class="sidebar-actions">
-        <button type="button" class="text-action" data-action="doctor">
-          <svg class="icon"><use href="#i-wrench"></use></svg>환경 진단
+        <button type="button" class="text-action" data-action="process-manager">
+          <svg class="icon"><use href="#i-activity"></use></svg>프로세스 관리자
         </button>
         <button type="button" class="text-action" data-action="open-root">
           <svg class="icon"><use href="#i-folder"></use></svg>저장소 열기
@@ -51,41 +52,82 @@
     </aside>
 
     <main>
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">APP LIBRARY</p>
-          <h1>설치된 앱</h1>
-        </div>
-        <button class="primary-button" type="button" data-action="install">
-          <svg class="icon"><use href="#i-plus"></use></svg>
-          앱 설치
-        </button>
-      </header>
+      <section id="app-library-view" class="view">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">APP LIBRARY</p>
+            <h1>설치된 앱</h1>
+          </div>
+          <button class="primary-button" type="button" data-action="install">
+            <svg class="icon"><use href="#i-plus"></use></svg>
+            앱 설치
+          </button>
+        </header>
 
-      <section class="workspace" aria-label="앱 목록">
-        <div class="toolbar">
-          <label class="search">
-            <svg class="icon"><use href="#i-search"></use></svg>
-            <input id="search-input" type="search" placeholder="이름, 패키지 또는 런타임 검색" autocomplete="off">
-          </label>
-          <button class="icon-button" type="button" title="새로 고침" aria-label="새로 고침" data-action="refresh">
+        <section class="workspace" aria-label="앱 목록">
+          <div class="toolbar">
+            <label class="search">
+              <svg class="icon"><use href="#i-search"></use></svg>
+              <input id="search-input" type="search" placeholder="이름, 패키지 또는 런타임 검색" autocomplete="off">
+            </label>
+            <button class="icon-button" type="button" title="새로 고침" aria-label="새로 고침" data-action="refresh">
+              <svg class="icon"><use href="#i-refresh"></use></svg>
+            </button>
+          </div>
+
+          <div class="list-head" aria-hidden="true">
+            <span>애플리케이션</span><span>실행 환경</span><span>포트 정책</span><span>작업</span>
+          </div>
+          <div id="app-list" class="app-list"></div>
+
+          <div id="empty-state" class="empty-state" hidden>
+            <div class="empty-symbol"><svg class="icon"><use href="#i-box"></use></svg></div>
+            <h2>설치된 앱이 없습니다</h2>
+            <p>.wapk 설치 레시피를 선택하면 전용 환경에 앱을 준비합니다.</p>
+            <button class="secondary-button" type="button" data-action="install">
+              <svg class="icon"><use href="#i-plus"></use></svg>첫 앱 설치
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <section id="process-manager-view" class="view" hidden>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">PROCESS MANAGER</p>
+            <h1>프로세스 관리자</h1>
+          </div>
+          <button class="primary-button" type="button" data-action="refresh-processes">
             <svg class="icon"><use href="#i-refresh"></use></svg>
+            새로 고침
           </button>
-        </div>
+        </header>
 
-        <div class="list-head" aria-hidden="true">
-          <span>애플리케이션</span><span>실행 환경</span><span>포트 정책</span><span>작업</span>
-        </div>
-        <div id="app-list" class="app-list"></div>
+        <section class="workspace" aria-label="실행 중인 프로세스">
+          <div class="port-meter">
+            <div class="port-meter-header">
+              <div>
+                <p class="settings-kicker">PORT RANGE 52000–52999</p>
+                <h3>현재 포트 점유율</h3>
+              </div>
+              <div class="port-number"><strong id="pm-port-count">0</strong><span>/ 1000</span></div>
+            </div>
+            <div class="meter-track"><i id="pm-port-fill"></i></div>
+            <p id="pm-port-summary">포트 상태를 불러오는 중입니다.</p>
+            <div id="pm-port-list" class="port-values"></div>
+          </div>
 
-        <div id="empty-state" class="empty-state" hidden>
-          <div class="empty-symbol"><svg class="icon"><use href="#i-box"></use></svg></div>
-          <h2>설치된 앱이 없습니다</h2>
-          <p>.wapk 설치 레시피를 선택하면 전용 환경에 앱을 준비합니다.</p>
-          <button class="secondary-button" type="button" data-action="install">
-            <svg class="icon"><use href="#i-plus"></use></svg>첫 앱 설치
-          </button>
-        </div>
+          <div class="process-section">
+            <div class="list-head process-head" aria-hidden="true">
+              <span>애플리케이션</span><span>런타임</span><span>포트</span><span>PID</span><span>작업</span>
+            </div>
+            <div id="process-list" class="app-list"></div>
+
+            <div id="process-empty" class="settings-empty" hidden>
+              현재 실행 중인 백엔드 프로세스가 없습니다.
+            </div>
+          </div>
+        </section>
       </section>
 
       <footer class="statusbar">
@@ -124,24 +166,13 @@
       </header>
       <div class="settings-layout">
         <nav class="settings-tabs" aria-label="설정 항목">
-          <button type="button" class="settings-tab active" data-settings-tab="status">상태</button>
-          <button type="button" class="settings-tab" data-settings-tab="runtime">런타임</button>
+          <button type="button" class="settings-tab active" data-settings-tab="runtime">런타임</button>
           <button type="button" class="settings-tab" data-settings-tab="developer">개발</button>
+          <button type="button" class="settings-tab" data-settings-tab="doctor">환경 진단</button>
           <button type="button" class="settings-tab" data-settings-tab="licenses">라이선스</button>
         </nav>
         <div class="settings-content">
-          <section class="settings-panel active" data-settings-panel="status">
-            <p class="settings-kicker">PORT RANGE 52000–52999</p>
-            <h3>현재 포트 점유율</h3>
-            <div class="port-meter">
-              <div class="port-number"><strong id="settings-port-count">0</strong><span>/ 1000</span></div>
-              <div class="meter-track"><i id="settings-port-fill"></i></div>
-              <p id="settings-port-summary">포트 상태를 불러오는 중입니다.</p>
-            </div>
-            <div id="settings-port-list" class="port-values"></div>
-          </section>
-
-          <section class="settings-panel" data-settings-panel="runtime">
+          <section class="settings-panel active" data-settings-panel="runtime">
             <div class="settings-panel-heading">
               <div><p class="settings-kicker">BUNDLED TOOLCHAIN</p><h3>런타임 업데이트 체크</h3></div>
               <button type="button" class="secondary-button" data-runtime-check>지금 확인</button>
@@ -161,6 +192,17 @@
               <i aria-hidden="true"></i>
             </label>
             <p class="settings-note">이미 실행 중인 앱에는 적용되지 않습니다. 다음 실행부터 적용됩니다.</p>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="doctor">
+            <div class="settings-panel-heading">
+              <div><p class="settings-kicker">DIAGNOSTICS</p><h3>환경 진단</h3></div>
+              <button type="button" class="secondary-button" data-doctor-check>다시 확인</button>
+            </div>
+            <p class="settings-description">설치된 런타임과 도구의 경로를 확인합니다.</p>
+            <div id="doctor-results" class="doctor-results">
+              <div class="settings-empty">아직 진단을 실행하지 않았습니다.</div>
+            </div>
           </section>
 
           <section class="settings-panel" data-settings-panel="licenses">

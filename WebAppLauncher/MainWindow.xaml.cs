@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly AppLauncher launcher;
     private readonly LauncherSettingsStore settingsStore;
     private LauncherSettings settings;
+    private readonly List<LaunchResult> activeLaunches = [];
 
     public MainWindow()
     {
@@ -115,6 +116,15 @@ public partial class MainWindow : Window
                 case "openData":
                     OpenData(command);
                     break;
+                case "openLog":
+                    OpenLog(command);
+                    break;
+                case "processManager":
+                    SendProcessManagerState();
+                    break;
+                case "killProcess":
+                    KillProcess(command);
+                    break;
                 case "doctor":
                     SendDoctor();
                     break;
@@ -174,8 +184,27 @@ public partial class MainWindow : Window
     {
         var app = ResolveApp(command);
         var result = launcher.Launch(app);
+        activeLaunches.Add(result);
+
+        if (result.Process is not null)
+        {
+            result.Process.EnableRaisingEvents = true;
+            result.Process.Exited += (_, _) =>
+                Dispatcher.BeginInvoke(() =>
+                {
+                    activeLaunches.Remove(result);
+                    SendProcessManagerState();
+                });
+        }
+
         var window = new AppWindow(result, settings.DeveloperMode);
+        window.Closed += (_, _) =>
+        {
+            activeLaunches.Remove(result);
+            SendProcessManagerState();
+        };
         window.Show();
+        SendProcessManagerState();
         Send(new
         {
             type = "toast",
@@ -196,6 +225,13 @@ public partial class MainWindow : Window
         var app = ResolveApp(command);
         Directory.CreateDirectory(app.DataDirectory);
         OpenFolder(app.DataDirectory);
+    }
+
+    private void OpenLog(LauncherCommand command)
+    {
+        var app = ResolveApp(command);
+        Directory.CreateDirectory(app.LogDirectory);
+        OpenFolder(app.LogDirectory);
     }
 
     private InstalledApp ResolveApp(LauncherCommand command)
@@ -235,6 +271,60 @@ public partial class MainWindow : Window
         });
     }
 
+    private void KillProcess(LauncherCommand command)
+    {
+        var app = ResolveApp(command);
+        var launch = activeLaunches.FirstOrDefault(l =>
+            l.App.Manifest.Package.Id.Equals(app.Manifest.Package.Id, StringComparison.OrdinalIgnoreCase) &&
+            l.App.Manifest.Package.Version.Equals(app.Manifest.Package.Version, StringComparison.OrdinalIgnoreCase));
+        if (launch is null)
+        {
+            throw new InvalidOperationException("실행 중인 프로세스를 찾을 수 없습니다.");
+        }
+
+        if (launch.Process is { HasExited: false } process)
+        {
+            process.Kill(entireProcessTree: true);
+        }
+
+        activeLaunches.Remove(launch);
+        launch.ReleasePort();
+        SendProcessManagerState();
+    }
+
+    private void SendProcessManagerState()
+    {
+        var occupiedPorts = PortManager.GetOccupiedPorts();
+        var processes = activeLaunches
+            .Where(l => l.Process is not null)
+            .Select(l => new
+            {
+                packageId = l.App.Manifest.Package.Id,
+                name = l.App.Manifest.Package.Name,
+                version = l.App.Manifest.Package.Version,
+                runtime = DescribeRuntime(l.App.Manifest.Runtime),
+                mode = l.App.Manifest.Entry.Mode ?? "static",
+                port = l.Port,
+                processId = l.Process!.Id,
+                processName = l.Process.ProcessName,
+                logPath = l.LogPath
+            })
+            .ToArray();
+
+        Send(new
+        {
+            type = "processManager",
+            ports = new
+            {
+                occupied = occupiedPorts.Count,
+                total = PortManager.LastPort - PortManager.FirstPort + 1,
+                percent = occupiedPorts.Count / 10.0,
+                values = occupiedPorts
+            },
+            processes
+        });
+    }
+
     private void SendDoctor()
     {
         Send(new
@@ -246,18 +336,10 @@ public partial class MainWindow : Window
 
     private void SendSettings()
     {
-        var occupiedPorts = PortManager.GetOccupiedPorts();
         Send(new
         {
             type = "settings",
-            developerMode = settings.DeveloperMode,
-            ports = new
-            {
-                occupied = occupiedPorts.Count,
-                total = PortManager.LastPort - PortManager.FirstPort + 1,
-                percent = occupiedPorts.Count / 10.0,
-                values = occupiedPorts
-            }
+            developerMode = settings.DeveloperMode
         });
     }
 
