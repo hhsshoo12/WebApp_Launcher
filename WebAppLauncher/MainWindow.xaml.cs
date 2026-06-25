@@ -17,12 +17,16 @@ public partial class MainWindow : Window
     private readonly AppRepository repository;
     private readonly AppInstaller installer;
     private readonly AppLauncher launcher;
+    private readonly LauncherSettingsStore settingsStore;
+    private LauncherSettings settings;
 
     public MainWindow()
     {
         repository = new AppRepository(paths);
         installer = new AppInstaller(paths);
         launcher = new AppLauncher(paths);
+        settingsStore = new LauncherSettingsStore(paths);
+        settings = settingsStore.Load();
         InitializeComponent();
         paths.EnsureRootLayout();
         Loaded += LoadedAsync;
@@ -108,9 +112,6 @@ public partial class MainWindow : Window
                 case "remove":
                     Remove(command);
                     break;
-                case "reassignPort":
-                    ReassignPort(command);
-                    break;
                 case "openData":
                     OpenData(command);
                     break;
@@ -119,6 +120,18 @@ public partial class MainWindow : Window
                     break;
                 case "openRoot":
                     OpenFolder(paths.Root);
+                    break;
+                case "settings":
+                    SendSettings();
+                    break;
+                case "setDeveloperMode":
+                    SetDeveloperMode(command);
+                    break;
+                case "checkRuntimeUpdates":
+                    await CheckRuntimeUpdatesAsync();
+                    break;
+                case "licenses":
+                    SendLicenses();
                     break;
                 default:
                     SendError($"지원하지 않는 명령입니다: {command.Type}");
@@ -161,7 +174,7 @@ public partial class MainWindow : Window
     {
         var app = ResolveApp(command);
         var result = launcher.Launch(app);
-        var window = new AppWindow(result);
+        var window = new AppWindow(result, settings.DeveloperMode);
         window.Show();
         Send(new
         {
@@ -176,18 +189,6 @@ public partial class MainWindow : Window
         var app = ResolveApp(command);
         installer.Remove(app.Manifest.Package.Id, app.Manifest.Package.Version);
         SendState($"{app.Manifest.Package.Name} {app.Manifest.Package.Version}을 삭제했습니다.");
-    }
-
-    private void ReassignPort(LauncherCommand command)
-    {
-        if (command.Port is null)
-        {
-            throw new InvalidOperationException("새 포트를 입력하십시오.");
-        }
-
-        var app = ResolveApp(command);
-        installer.ReassignPort(app.Manifest.Package.Id, command.Port.Value, app.Manifest.Package.Version);
-        SendState($"포트를 {command.Port.Value}(으)로 변경했습니다. 브라우저 저장소 origin도 변경됩니다.");
     }
 
     private void OpenData(LauncherCommand command)
@@ -217,8 +218,8 @@ public partial class MainWindow : Window
                 version = app.Manifest.Package.Version,
                 runtime = DescribeRuntime(app.Manifest.Runtime),
                 mode = app.Manifest.Entry.Mode ?? "static",
-                port = app.Manifest.Network.Port,
-                origin = app.Manifest.Network.Origin,
+                port = app.Manifest.Entry.Mode == "server" ? "자동" : "없음",
+                origin = app.Manifest.Entry.Mode == "server" ? "실행 시 할당" : "로컬 파일",
                 installedAt = app.Manifest.InstalledAt,
                 installDirectory = app.InstallDirectory,
                 icon = ReadIconDataUri(app)
@@ -230,7 +231,6 @@ public partial class MainWindow : Window
             type = "state",
             root = paths.Root,
             apps,
-            portRange = new { first = PortManager.FirstPort, last = PortManager.LastPort },
             notification
         });
     }
@@ -242,6 +242,66 @@ public partial class MainWindow : Window
             type = "doctor",
             items = new ToolResolver(paths).Doctor()
         });
+    }
+
+    private void SendSettings()
+    {
+        var occupiedPorts = PortManager.GetOccupiedPorts();
+        Send(new
+        {
+            type = "settings",
+            developerMode = settings.DeveloperMode,
+            ports = new
+            {
+                occupied = occupiedPorts.Count,
+                total = PortManager.LastPort - PortManager.FirstPort + 1,
+                percent = occupiedPorts.Count / 10.0,
+                values = occupiedPorts
+            }
+        });
+    }
+
+    private void SetDeveloperMode(LauncherCommand command)
+    {
+        if (command.Enabled is null)
+        {
+            throw new InvalidOperationException("개발 모드 설정값이 없습니다.");
+        }
+
+        settings = settings with { DeveloperMode = command.Enabled.Value };
+        settingsStore.Save(settings);
+        SendSettings();
+        Send(new
+        {
+            type = "toast",
+            tone = "success",
+            message = settings.DeveloperMode
+                ? "개발 모드를 켰습니다. 새로 실행하는 앱에서 WebView 콘솔이 열립니다."
+                : "개발 모드를 껐습니다."
+        });
+    }
+
+    private async Task CheckRuntimeUpdatesAsync()
+    {
+        Send(new { type = "runtimeCheck", status = "checking" });
+        var items = await new RuntimeInspector(paths).InspectAsync();
+        Send(new { type = "runtimeCheck", status = "complete", items });
+    }
+
+    private void SendLicenses()
+    {
+        Send(new
+        {
+            type = "licenses",
+            project = ReadDistributionText("LICENSE"),
+            thirdParty = ReadDistributionText("THIRD_PARTY_NOTICES.md")
+        });
+    }
+
+    private static string ReadDistributionText(string fileName)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, fileName);
+        return File.Exists(path) ? File.ReadAllText(path) : "라이선스 문서를 찾을 수 없습니다.";
     }
 
     private void SendError(string message)
@@ -304,5 +364,5 @@ public partial class MainWindow : Window
         string Type,
         string? PackageId = null,
         string? Version = null,
-        int? Port = null);
+        bool? Enabled = null);
 }

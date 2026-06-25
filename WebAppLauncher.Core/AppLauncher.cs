@@ -19,16 +19,10 @@ public sealed class AppLauncher
         Directory.CreateDirectory(app.LogDirectory);
         Directory.CreateDirectory(app.TempDirectory);
 
-        if (ports.IsPortInUse(app.Manifest.Network.Port))
-        {
-            throw new InvalidOperationException(
-                $"Port {app.Manifest.Network.Port} is in use. Close the conflicting process or explicitly reassign this app's port.");
-        }
-
         if (app.Manifest.Entry.Mode == "static")
         {
             var htmlPath = Path.Combine(app.SourceDirectory, app.Manifest.Entry.Html);
-            return new LaunchResult(app, new Uri(htmlPath), null, null);
+            return new LaunchResult(app, new Uri(htmlPath), null, null, null);
         }
 
         if (string.IsNullOrWhiteSpace(app.Manifest.Entry.Server))
@@ -43,11 +37,29 @@ public sealed class AppLauncher
         }
 
         var logPath = Path.Combine(app.LogDirectory, $"{DateTimeOffset.Now:yyyyMMdd-HHmmss}.log");
-        var process = StartBackend(app, serverPath, logPath);
-        return new LaunchResult(app, new Uri(app.Manifest.Network.Origin), process, logPath);
+        var port = ports.AllocatePort();
+        try
+        {
+            var process = StartBackend(app, serverPath, logPath, port);
+            var result = new LaunchResult(
+                app,
+                new Uri($"http://{app.Manifest.Network.Host}:{port}"),
+                process,
+                logPath,
+                port,
+                () => ports.ReleasePort(port));
+            process.EnableRaisingEvents = true;
+            process.Exited += (_, _) => result.ReleasePort();
+            return result;
+        }
+        catch
+        {
+            ports.ReleasePort(port);
+            throw;
+        }
     }
 
-    private Process StartBackend(InstalledApp app, string serverPath, string logPath)
+    private Process StartBackend(InstalledApp app, string serverPath, string logPath, int port)
     {
         var extension = Path.GetExtension(serverPath);
         var executable = extension.Equals(".py", StringComparison.OrdinalIgnoreCase)
@@ -68,7 +80,7 @@ public sealed class AppLauncher
         };
 
         startInfo.Environment["WEBAPP_HOST"] = app.Manifest.Network.Host;
-        startInfo.Environment["WEBAPP_PORT"] = app.Manifest.Network.Port.ToString();
+        startInfo.Environment["WEBAPP_PORT"] = port.ToString();
         startInfo.Environment["WEBAPP_ROOT"] = app.InstallDirectory;
         startInfo.Environment["WEBAPP_SOURCE_DIR"] = app.SourceDirectory;
         startInfo.Environment["WEBAPP_DATA_DIR"] = app.DataDirectory;

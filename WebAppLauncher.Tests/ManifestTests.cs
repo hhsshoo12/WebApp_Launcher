@@ -49,8 +49,8 @@ public sealed class ManifestTests
             new InstalledPaths("source", "data", "logs", "temp"),
             new RuntimeInfo("python313", "nodejs-lts-22"),
             new EntryInfo("app.html", null, null, null, "server", "app.py"),
-            new NetworkInfo("127.0.0.1", 52017, "http://127.0.0.1:52017"),
-            new StorageInfo("persistent", false, false),
+            new NetworkInfo("127.0.0.1", 0, "dynamic"),
+            new StorageInfo("ephemeral", false, false),
             new WindowInfo(1200, 800, true, false));
 
         TomlManifestStore.SaveWebApp(path, manifest);
@@ -59,6 +59,87 @@ public sealed class ManifestTests
         Assert.Equal(manifest.Package, loaded.Package);
         Assert.Equal(manifest.Network, loaded.Network);
         Assert.Equal(manifest.Entry.Server, loaded.Entry.Server);
+    }
+
+    [Fact]
+    public void RepositoryMigratesLegacyRuntimePortAndBrowserProfile()
+    {
+        using var temp = new TempDirectory();
+        var paths = new WebAppPaths(temp.Path);
+        paths.EnsureRootLayout();
+        var installDirectory = paths.GetAppDirectory("hhsshoo12@webapp-test", "1.0");
+        Directory.CreateDirectory(installDirectory);
+        var manifestPath = Path.Combine(installDirectory, "webapp-test.webapp");
+        var legacyManifest = new WebAppManifest(
+            1,
+            DateTimeOffset.Parse("2026-06-23T00:00:00Z"),
+            "abcdef1234567890",
+            new PackageInfo("hhsshoo12@webapp-test", "WebApp Test", "1.0"),
+            new InstalledPaths("source", "data", "logs", "temp"),
+            new RuntimeInfo("python312", "none"),
+            new EntryInfo("app.html", null, null, null, "server", "app.py"),
+            new NetworkInfo("127.0.0.1", 52017, "http://127.0.0.1:52017"),
+            new StorageInfo("persistent", false, false),
+            new WindowInfo(1200, 800, true, false));
+        TomlManifestStore.SaveWebApp(manifestPath, legacyManifest);
+
+        var installed = new AppRepository(paths).ListInstalled();
+        var migrated = TomlManifestStore.LoadWebApp(manifestPath);
+
+        Assert.Single(installed);
+        Assert.Equal("python313", installed[0].Manifest.Runtime.Python);
+        Assert.Equal("python313", migrated.Runtime.Python);
+        Assert.Equal(0, migrated.Network.Port);
+        Assert.Equal("dynamic", migrated.Network.Origin);
+        Assert.Equal("ephemeral", migrated.Storage.BrowserProfile);
+        Assert.DoesNotContain("python312", File.ReadAllText(manifestPath));
+    }
+
+    [Fact]
+    public void PortManagerAllocatesNearestFreePortAndReusesReleasedPort()
+    {
+        var manager = new PortManager(port => port == PortManager.FirstPort);
+
+        var first = manager.AllocatePort();
+        var second = manager.AllocatePort();
+        manager.ReleasePort(first);
+        var reused = manager.AllocatePort();
+
+        Assert.Equal(PortManager.FirstPort + 1, first);
+        Assert.Equal(PortManager.FirstPort + 2, second);
+        Assert.Equal(first, reused);
+    }
+
+    [Fact]
+    public void LaunchResultReleasesPortOnlyOnce()
+    {
+        var releases = 0;
+        var result = new LaunchResult(
+            null!,
+            new Uri("http://127.0.0.1:52000"),
+            null,
+            null,
+            52000,
+            () => releases++);
+
+        result.ReleasePort();
+        result.ReleasePort();
+
+        Assert.Equal(1, releases);
+    }
+
+    [Fact]
+    public void LauncherSettingsStorePersistsDeveloperMode()
+    {
+        using var temp = new TempDirectory();
+        var paths = new WebAppPaths(temp.Path);
+        var store = new LauncherSettingsStore(paths);
+
+        store.Save(new LauncherSettings(DeveloperMode: true));
+        var loaded = store.Load();
+
+        Assert.True(loaded.DeveloperMode);
+        Assert.True(File.Exists(Path.Combine(temp.Path, "launcher-settings.json")));
     }
 
     [Fact]

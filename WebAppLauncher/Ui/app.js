@@ -3,8 +3,10 @@ const state = {
   apps: [],
   root: "",
   query: "",
-  portRange: { first: 52000, last: 52999 },
-  selected: null
+  selected: null,
+  settings: { developerMode: false, ports: null },
+  licenses: { project: "", thirdParty: "" },
+  activeLicense: "project"
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -12,6 +14,7 @@ const appList = $("#app-list");
 const emptyState = $("#empty-state");
 const busyLayer = $("#busy-layer");
 const modalBackdrop = $("#modal-backdrop");
+const settingsBackdrop = $("#settings-backdrop");
 
 function icon(name) {
   return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
@@ -50,10 +53,6 @@ function render() {
   );
 
   $("#nav-count").textContent = state.apps.length;
-  $("#port-usage").textContent = `${state.apps.length} / 1000`;
-  $("#port-fill").style.width = `${Math.min(100, state.apps.length / 10)}%`;
-  $("#port-first").textContent = state.portRange.first;
-  $("#port-last").textContent = state.portRange.last;
   $("#root-path").textContent = state.root;
 
   appList.innerHTML = apps.map((app) => {
@@ -75,7 +74,6 @@ function render() {
         <div class="row-actions">
           <button class="secondary-button run-button" type="button" data-row-action="run">${icon("play")}실행</button>
           <button class="icon-button" type="button" title="데이터 폴더 열기" aria-label="데이터 폴더 열기" data-row-action="open-data">${icon("folder")}</button>
-          <button class="icon-button" type="button" title="포트 변경" aria-label="포트 변경" data-row-action="port">${icon("port")}</button>
           <button class="icon-button delete" type="button" title="앱 삭제" aria-label="앱 삭제" data-row-action="remove">${icon("trash")}</button>
         </div>
       </article>`;
@@ -87,7 +85,7 @@ function render() {
   if (!noApps && apps.length === 0) {
     emptyState.hidden = false;
     emptyState.querySelector("h2").textContent = "검색 결과가 없습니다";
-    emptyState.querySelector("p").textContent = "다른 이름, 패키지 또는 포트로 검색하십시오.";
+    emptyState.querySelector("p").textContent = "다른 이름, 패키지 또는 런타임으로 검색하십시오.";
     emptyState.querySelector("button").hidden = true;
   } else {
     emptyState.querySelector("h2").textContent = "설치된 앱이 없습니다";
@@ -141,23 +139,71 @@ function showRemove(app) {
   });
 }
 
-function showPort(app) {
-  state.selected = app;
-  openModal({
-    eyebrow: "NETWORK",
-    title: "영구 포트 변경",
-    content: `<label>새 포트<input id="port-input" type="number" min="${state.portRange.first}" max="${state.portRange.last}" value="${app.port}"></label><p class="warning">포트를 바꾸면 origin이 달라져 기존 브라우저 저장소를 이어서 사용할 수 없습니다.</p>`,
-    actions: `<button class="secondary-button" type="button" data-action="close-modal">취소</button><button class="primary-button" type="button" data-action="confirm-port">${icon("port")}변경</button>`
-  });
-  $("#port-input").select();
-}
-
 function showDoctor(items) {
   openModal({
     eyebrow: "RUNTIME STATUS",
     title: "환경 진단",
     content: `<div class="doctor-list">${items.map((item) => `<div class="doctor-item">${escapeHtml(item)}</div>`).join("")}</div>`,
     actions: `<button class="primary-button" type="button" data-action="close-modal">확인</button>`
+  });
+}
+
+function openSettings() {
+  settingsBackdrop.hidden = false;
+  settingsBackdrop.querySelector("button")?.focus();
+  post({ type: "settings" });
+  post({ type: "licenses" });
+}
+
+function closeSettings() {
+  settingsBackdrop.hidden = true;
+}
+
+function selectSettingsTab(name) {
+  document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.settingsTab === name);
+  });
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.settingsPanel === name);
+  });
+}
+
+function renderSettings() {
+  const ports = state.settings.ports ?? { occupied: 0, total: 1000, percent: 0, values: [] };
+  $("#settings-port-count").textContent = ports.occupied;
+  $("#settings-port-fill").style.width = `${Math.min(100, ports.percent)}%`;
+  $("#settings-port-summary").textContent = ports.occupied === 0
+    ? "현재 점유된 런처 포트가 없습니다."
+    : `${ports.occupied}개 사용 중 · ${ports.total - ports.occupied}개 사용 가능`;
+  $("#settings-port-list").innerHTML = ports.values.length
+    ? ports.values.map((port) => `<code>${escapeHtml(port)}</code>`).join("")
+    : '<span class="settings-empty-inline">점유 포트 없음</span>';
+  $("#developer-mode-toggle").checked = Boolean(state.settings.developerMode);
+}
+
+function renderRuntimeResults(items) {
+  const labels = {
+    current: ["최신", "good"],
+    newer: ["기준보다 새 버전", "good"],
+    update: ["업데이트 필요", "warning"],
+    missing: ["설치 안 됨", "muted"],
+    error: ["확인 실패", "error"]
+  };
+  $("#runtime-results").innerHTML = items.map((item) => {
+    const [label, tone] = labels[item.status] ?? labels.error;
+    return `<div class="runtime-result">
+      <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.id)}</small></div>
+      <div class="runtime-version"><span>${escapeHtml(item.installedVersion || "—")}</span><small>기준 ${escapeHtml(item.expectedVersion)}</small></div>
+      <b class="status-chip ${tone}">${label}</b>
+    </div>`;
+  }).join("");
+}
+
+function renderLicense() {
+  $("#license-text").textContent =
+    state.licenses[state.activeLicense] || "라이선스 문서를 찾을 수 없습니다.";
+  document.querySelectorAll("[data-license-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.licenseTab === state.activeLicense);
   });
 }
 
@@ -169,17 +215,12 @@ document.addEventListener("click", (event) => {
     if (action === "refresh") post({ type: "refresh" });
     if (action === "doctor") post({ type: "doctor" });
     if (action === "open-root") post({ type: "openRoot" });
+    if (action === "settings") openSettings();
     if (action === "close-modal") closeModal();
     if (action === "confirm-remove" && state.selected) {
       post(commandFor(state.selected, "remove"));
       closeModal();
       setBusy(true, "앱을 삭제하는 중입니다.");
-    }
-    if (action === "confirm-port" && state.selected) {
-      const port = Number($("#port-input").value);
-      post(commandFor(state.selected, "reassignPort", { port }));
-      closeModal();
-      setBusy(true, "포트 설정을 변경하는 중입니다.");
     }
     return;
   }
@@ -191,8 +232,37 @@ document.addEventListener("click", (event) => {
   const action = rowButton.dataset.rowAction;
   if (action === "run") post(commandFor(app, "run"));
   if (action === "open-data") post(commandFor(app, "openData"));
-  if (action === "port") showPort(app);
   if (action === "remove") showRemove(app);
+});
+
+settingsBackdrop.addEventListener("click", (event) => {
+  const closeButton = event.target.closest("[data-settings-close]");
+  if (closeButton || event.target === settingsBackdrop) {
+    closeSettings();
+    return;
+  }
+
+  const tab = event.target.closest("[data-settings-tab]");
+  if (tab) {
+    selectSettingsTab(tab.dataset.settingsTab);
+    return;
+  }
+
+  if (event.target.closest("[data-runtime-check]")) {
+    $("#runtime-results").innerHTML = '<div class="settings-empty">버전을 확인하는 중입니다.</div>';
+    post({ type: "checkRuntimeUpdates" });
+    return;
+  }
+
+  const licenseTab = event.target.closest("[data-license-tab]");
+  if (licenseTab) {
+    state.activeLicense = licenseTab.dataset.licenseTab;
+    renderLicense();
+  }
+});
+
+$("#developer-mode-toggle").addEventListener("change", (event) => {
+  post({ type: "setDeveloperMode", enabled: event.target.checked });
 });
 
 $("#search-input").addEventListener("input", (event) => {
@@ -201,7 +271,8 @@ $("#search-input").addEventListener("input", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !modalBackdrop.hidden) closeModal();
+  if (event.key === "Escape" && !settingsBackdrop.hidden) closeSettings();
+  else if (event.key === "Escape" && !modalBackdrop.hidden) closeModal();
 });
 
 if (host) {
@@ -209,7 +280,6 @@ if (host) {
     if (data.type === "state") {
       state.apps = data.apps ?? [];
       state.root = data.root ?? "";
-      state.portRange = data.portRange ?? state.portRange;
       setBusy(false);
       setStatus(`${state.apps.length}개의 앱이 준비되어 있습니다.`);
       render();
@@ -218,6 +288,20 @@ if (host) {
     if (data.type === "busy") setBusy(true, data.message);
     if (data.type === "idle") setBusy(false);
     if (data.type === "doctor") showDoctor(data.items ?? []);
+    if (data.type === "settings") {
+      state.settings = data;
+      renderSettings();
+    }
+    if (data.type === "runtimeCheck" && data.status === "complete") {
+      renderRuntimeResults(data.items ?? []);
+    }
+    if (data.type === "licenses") {
+      state.licenses = {
+        project: data.project ?? "",
+        thirdParty: data.thirdParty ?? ""
+      };
+      renderLicense();
+    }
     if (data.type === "toast") toast(data.message, data.tone);
     if (data.type === "error") {
       setBusy(false);
@@ -229,9 +313,9 @@ if (host) {
 } else {
   state.root = "C:\\Users\\user\\.webapp";
   state.apps = [
-    { packageId: "hhsshoo12@webapp-test", name: "WebApp Test", version: "1.0", runtime: "python313", mode: "server", port: 52017 },
-    { packageId: "studio@note-grid", name: "Note Grid", version: "2.4", runtime: "nodejs-lts-24", mode: "server", port: 52031 },
-    { packageId: "local@status-board", name: "Status Board", version: "1.3", runtime: "", mode: "static", port: 52044 }
+    { packageId: "hhsshoo12@webapp-test", name: "WebApp Test", version: "1.0", runtime: "python313", mode: "server", port: "자동" },
+    { packageId: "studio@note-grid", name: "Note Grid", version: "2.4", runtime: "nodejs-lts-24", mode: "server", port: "자동" },
+    { packageId: "local@status-board", name: "Status Board", version: "1.3", runtime: "", mode: "static", port: "없음" }
   ];
   setStatus("미리보기 모드");
   render();

@@ -5,14 +5,12 @@ public sealed class AppInstaller
     private readonly WebAppPaths paths;
     private readonly ToolResolver tools;
     private readonly AppRepository repository;
-    private readonly PortManager ports;
 
     public AppInstaller(WebAppPaths paths)
     {
         this.paths = paths;
         tools = new ToolResolver(paths);
         repository = new AppRepository(paths);
-        ports = new PortManager();
     }
 
     public async Task<InstalledApp> InstallAsync(string wapkPath, CancellationToken cancellationToken = default)
@@ -48,7 +46,6 @@ public sealed class AppInstaller
 
             var mode = ResolveMode(wapk, sourceDirectory);
             var server = ResolveServer(wapk, sourceDirectory);
-            var port = ports.AllocatePort(repository.ListInstalled());
             var manifestName = $"{GetRepoName(wapk.Package.Id)}.webapp";
             var manifestPath = Path.Combine(installDirectory, manifestName);
             var manifest = new WebAppManifest(
@@ -59,8 +56,8 @@ public sealed class AppInstaller
                 new InstalledPaths("source", "data", "logs", "temp"),
                 wapk.Runtime,
                 new EntryInfo(wapk.Entry.Html, null, null, null, mode, server),
-                new NetworkInfo("127.0.0.1", port, $"http://127.0.0.1:{port}"),
-                new StorageInfo("persistent", false, false),
+                new NetworkInfo("127.0.0.1", 0, "dynamic"),
+                new StorageInfo("ephemeral", false, false),
                 wapk.Window);
 
             TomlManifestStore.SaveWebApp(manifestPath, manifest);
@@ -83,34 +80,6 @@ public sealed class AppInstaller
     {
         var app = repository.GetInstalled(packageId, version);
         Directory.Delete(app.InstallDirectory, recursive: true);
-    }
-
-    public void ReassignPort(string packageId, int port, string? version = null)
-    {
-        if (port is < PortManager.FirstPort or > PortManager.LastPort)
-        {
-            throw new InvalidOperationException("Port must be in the 52000..52999 range.");
-        }
-
-        var app = repository.GetInstalled(packageId, version);
-        if (ports.IsPortInUse(port))
-        {
-            throw new InvalidOperationException($"Port {port} is currently in use.");
-        }
-
-        var duplicate = repository.ListInstalled().FirstOrDefault(other =>
-            !string.Equals(other.ManifestPath, app.ManifestPath, StringComparison.OrdinalIgnoreCase) &&
-            other.Manifest.Network.Port == port);
-        if (duplicate is not null)
-        {
-            throw new InvalidOperationException($"Port {port} is already assigned to {duplicate.Manifest.Package.Id}/{duplicate.Manifest.Package.Version}.");
-        }
-
-        var updated = app.Manifest with
-        {
-            Network = new NetworkInfo("127.0.0.1", port, $"http://127.0.0.1:{port}")
-        };
-        TomlManifestStore.SaveWebApp(app.ManifestPath, updated);
     }
 
     private async Task<string> CheckoutAsync(WapkManifest wapk, CancellationToken cancellationToken)

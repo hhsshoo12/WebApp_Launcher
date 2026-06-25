@@ -34,7 +34,7 @@ public static class ManifestValidator
         Require(manifest.Source.Branch, "source.branch");
         Require(manifest.Source.Commit, "source.commit");
         EnsureRelativePath(manifest.Source.AppDir, "source.app_dir");
-        ValidateRuntime(manifest.Runtime);
+        ValidateRuntime(manifest.Runtime, allowLegacyPython312: false);
         EnsureRelativePath(manifest.Entry.Html, "entry.html");
         EnsureOptionalRelativePath(manifest.Entry.Python, "entry.python");
         EnsureOptionalRelativePath(manifest.Entry.Node, "entry.node");
@@ -51,7 +51,7 @@ public static class ManifestValidator
 
         ValidatePackage(manifest.Package);
         Require(manifest.SourceCommit, "webapp.source_commit");
-        ValidateRuntime(manifest.Runtime);
+        ValidateRuntime(manifest.Runtime, allowLegacyPython312: true);
         EnsureRelativePath(manifest.Paths.Source, "paths.source");
         EnsureRelativePath(manifest.Paths.Data, "paths.data");
         EnsureRelativePath(manifest.Paths.Logs, "paths.logs");
@@ -64,9 +64,10 @@ public static class ManifestValidator
         }
 
         EnsureOptionalRelativePath(manifest.Entry.Server, "entry.server");
-        if (manifest.Network.Port is < 52000 or > 52999)
+        if (manifest.Network.Port != 0 &&
+            manifest.Network.Port is < PortManager.FirstPort or > PortManager.LastPort)
         {
-            throw new InvalidDataException("network.port must be in the 52000..52999 range.");
+            throw new InvalidDataException("network.port must be 0 or in the legacy 52000..52999 range.");
         }
 
         if (manifest.Network.Host != "127.0.0.1")
@@ -74,9 +75,9 @@ public static class ManifestValidator
             throw new InvalidDataException("network.host must be 127.0.0.1 in v1.");
         }
 
-        if (manifest.Storage.BrowserProfile != "persistent")
+        if (manifest.Storage.BrowserProfile is not ("ephemeral" or "persistent"))
         {
-            throw new InvalidDataException("storage.browser_profile must be persistent in v1.");
+            throw new InvalidDataException("storage.browser_profile must be ephemeral.");
         }
 
         if (manifest.Storage.Pwa || manifest.Storage.ServiceWorker)
@@ -98,9 +99,12 @@ public static class ManifestValidator
         }
     }
 
-    private static void ValidateRuntime(RuntimeInfo runtime)
+    private static void ValidateRuntime(RuntimeInfo runtime, bool allowLegacyPython312)
     {
-        if (!PythonRuntimes.Contains(runtime.Python))
+        var isLegacyPython312 =
+            allowLegacyPython312 &&
+            runtime.Python.Equals("python312", StringComparison.OrdinalIgnoreCase);
+        if (!PythonRuntimes.Contains(runtime.Python) && !isLegacyPython312)
         {
             throw new InvalidDataException("runtime.python must be one of none, python313, python314.");
         }

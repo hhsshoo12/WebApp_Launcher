@@ -65,9 +65,21 @@ public sealed record LaunchResult(
     InstalledApp App,
     Uri Uri,
     System.Diagnostics.Process? Process,
-    string? LogPath)
+    string? LogPath,
+    int? Port,
+    Action? ReleasePortAction = null)
 {
+    private int portReleased;
+
     public bool HasBackend => Process is not null;
+
+    public void ReleasePort()
+    {
+        if (Interlocked.Exchange(ref portReleased, 1) == 0)
+        {
+            ReleasePortAction?.Invoke();
+        }
+    }
 }
 
 public sealed record CommandResult(int ExitCode, string StandardOutput, string StandardError);

@@ -27,14 +27,14 @@ internal static class Cli
                     RequireArg(args, 1, "install requires a .wapk path.");
                     var app = await installer.InstallAsync(args[1]);
                     Console.WriteLine($"Installed {app.Manifest.Package.Id}/{app.Manifest.Package.Version}");
-                    Console.WriteLine($"Origin: {app.Manifest.Network.Origin}");
+                    Console.WriteLine("Port: assigned dynamically at launch");
                     Console.WriteLine($"Path: {app.InstallDirectory}");
                     return 0;
 
                 case "list":
                     foreach (var installed in repository.ListInstalled())
                     {
-                        Console.WriteLine($"{installed.Manifest.Package.Id}\t{installed.Manifest.Package.Version}\t{installed.Manifest.Network.Origin}\t{installed.InstallDirectory}");
+                        Console.WriteLine($"{installed.Manifest.Package.Id}\t{installed.Manifest.Package.Version}\tdynamic\t{installed.InstallDirectory}");
                     }
                     return 0;
 
@@ -65,9 +65,6 @@ internal static class Cli
                     }
                     return 0;
 
-                case "port":
-                    return HandlePort(args, installer, repository);
-
                 default:
                     throw new InvalidOperationException($"Unknown command: {args[0]}");
             }
@@ -76,35 +73,6 @@ internal static class Cli
         {
             Console.Error.WriteLine(ex.Message);
             return 1;
-        }
-    }
-
-    private static int HandlePort(string[] args, AppInstaller installer, AppRepository repository)
-    {
-        RequireArg(args, 1, "port requires a subcommand.");
-        switch (args[1].ToLowerInvariant())
-        {
-            case "list":
-                foreach (var app in repository.ListInstalled())
-                {
-                    Console.WriteLine($"{app.Manifest.Network.Port}\t{app.Manifest.Package.Id}\t{app.Manifest.Package.Version}");
-                }
-                return 0;
-
-            case "reassign":
-                RequireArg(args, 3, "port reassign requires package id and port.");
-                if (!int.TryParse(args[3], out var port))
-                {
-                    throw new InvalidOperationException("port must be an integer.");
-                }
-
-                Console.Error.WriteLine("Warning: changing a port changes the browser origin. localStorage/IndexedDB/Cache Storage may no longer be visible.");
-                installer.ReassignPort(args[2], port, GetOption(args, "--version"));
-                Console.WriteLine($"Reassigned {args[2]} to {port}");
-                return 0;
-
-            default:
-                throw new InvalidOperationException($"Unknown port subcommand: {args[1]}");
         }
     }
 
@@ -140,8 +108,6 @@ internal static class Cli
           run <owner@repo> [--version <version>] [--root <path>]
           remove <owner@repo> [--version <version>] [--root <path>]
           doctor [--root <path>]
-          port list [--root <path>]
-          port reassign <owner@repo> <52000-52999> [--version <version>] [--root <path>]
         """);
     }
 }
