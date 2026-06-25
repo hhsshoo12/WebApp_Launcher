@@ -1,0 +1,37 @@
+# Pinned runtime/tool catalog for WebAppLauncher.Bootstrapper.
+# Update deliberately; these URLs are part of the reproducible runtime contract.
+
+[archive.python313]
+type = "python-installer"
+url = "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe"
+destination = "runtime/python313"
+
+[archive.python314]
+type = "python-installer"
+url = "https://www.python.org/ftp/python/3.14.6/python-3.14.6-amd64.exe"
+destination = "runtime/python314"
+
+[archive.nodejs-lts-22]
+type = "zip"
+url = "https://nodejs.org/dist/v22.23.0/node-v22.23.0-win-x64.zip"
+destination = "runtime/nodejs-lts-22"
+
+[archive.nodejs-lts-24]
+type = "zip"
+url = "https://nodejs.org/dist/v24.17.0/node-v24.17.0-win-x64.zip"
+destination = "runtime/nodejs-lts-24"
+
+[archive.git]
+type = "7z-sfx"
+url = "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/PortableGit-2.54.0-64-bit.7z.exe"
+destination = "tools/git"
+
+[archive.uv]
+type = "zip"
+url = "https://github.com/astral-sh/uv/releases/download/0.11.23/uv-x86_64-pc-windows-msvc.zip"
+destination = "tools/uv"
+
+[archive.pnpm]
+type = "zip"
+url = "https://github.com/pnpm/pnpm/releases/download/v11.8.0/pnpm-win32-x64.zip"
+destination = "tools/pnpm"

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>WebApp Launcher</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg class="icon-library" aria-hidden="true">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8Z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5-5L12 3.6 9.6 6 7.3 3.7a4 4 0 0 0 5 5L20 16.4a2.1 2.1 0 0 1-3 3Z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></symbol>
+    <symbol id="i-port" viewBox="0 0 24 24"><path d="M6 3v4M18 3v4M4 7h16v4a8 8 0 0 1-16 0ZM9 17v4M15 17v4M8 21h8"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9ZM4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+  </svg>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><img src="logo.png" alt=""></div>
+        <div><strong>WebApp</strong><span>Launcher</span></div>
+      </div>
+
+      <nav aria-label="런처 메뉴">
+        <button class="nav-item active" type="button">
+          <svg class="icon"><use href="#i-box"></use></svg>
+          설치된 앱
+          <span id="nav-count" class="nav-count">0</span>
+        </button>
+      </nav>
+
+      <div class="port-panel">
+        <div class="port-label"><span>LOCAL PORTS</span><b id="port-usage">0 / 1000</b></div>
+        <div class="port-track"><i id="port-fill"></i></div>
+        <p><span id="port-first">52000</span><span id="port-last">52999</span></p>
+      </div>
+
+      <div class="sidebar-actions">
+        <button type="button" class="text-action" data-action="doctor">
+          <svg class="icon"><use href="#i-wrench"></use></svg>환경 진단
+        </button>
+        <button type="button" class="text-action" data-action="open-root">
+          <svg class="icon"><use href="#i-folder"></use></svg>저장소 열기
+        </button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">APP LIBRARY</p>
+          <h1>설치된 앱</h1>
+        </div>
+        <button class="primary-button" type="button" data-action="install">
+          <svg class="icon"><use href="#i-plus"></use></svg>
+          앱 설치
+        </button>
+      </header>
+
+      <section class="workspace" aria-label="앱 목록">
+        <div class="toolbar">
+          <label class="search">
+            <svg class="icon"><use href="#i-search"></use></svg>
+            <input id="search-input" type="search" placeholder="이름, 패키지 또는 포트 검색" autocomplete="off">
+          </label>
+          <button class="icon-button" type="button" title="새로 고침" aria-label="새로 고침" data-action="refresh">
+            <svg class="icon"><use href="#i-refresh"></use></svg>
+          </button>
+        </div>
+
+        <div class="list-head" aria-hidden="true">
+          <span>애플리케이션</span><span>실행 환경</span><span>포트</span><span>작업</span>
+        </div>
+        <div id="app-list" class="app-list"></div>
+
+        <div id="empty-state" class="empty-state" hidden>
+          <div class="empty-symbol"><svg class="icon"><use href="#i-box"></use></svg></div>
+          <h2>설치된 앱이 없습니다</h2>
+          <p>.wapk 설치 레시피를 선택하면 전용 환경에 앱을 준비합니다.</p>
+          <button class="secondary-button" type="button" data-action="install">
+            <svg class="icon"><use href="#i-plus"></use></svg>첫 앱 설치
+          </button>
+        </div>
+      </section>
+
+      <footer class="statusbar">
+        <span class="status-dot"></span>
+        <span id="status-text">런처를 준비하는 중입니다.</span>
+        <code id="root-path"></code>
+      </footer>
+    </main>
+  </div>
+
+  <div id="busy-layer" class="busy-layer" hidden>
+    <div class="busy-line"></div>
+    <p id="busy-text">처리하는 중입니다.</p>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-heading">
+        <div><p class="eyebrow" id="modal-eyebrow">CONFIRM</p><h2 id="modal-title">확인</h2></div>
+        <button type="button" class="icon-button" title="닫기" aria-label="닫기" data-action="close-modal">
+          <svg class="icon"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+      <div id="modal-content" class="modal-content"></div>
+      <div id="modal-actions" class="modal-actions"></div>
+    </section>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
