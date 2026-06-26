@@ -125,7 +125,7 @@ public sealed class AppInstaller
                 ["UV_CACHE_DIR"] = paths.UvCache,
                 ["UV_PROJECT_ENVIRONMENT"] = app.VenvDirectory
             };
-            await RunCheckedAsync(tools.Uv, "sync --frozen", app.SourceDirectory, cancellationToken, env);
+            await RunCheckedAsync(tools.Uv, ["sync", "--frozen"], app.SourceDirectory, cancellationToken, env);
         }
 
         if (!app.Manifest.Runtime.Node.Equals("none", StringComparison.OrdinalIgnoreCase) &&
@@ -137,7 +137,12 @@ public sealed class AppInstaller
                 ["PNPM_HOME"] = Path.Combine(paths.Tools, "pnpm"),
                 ["WEBAPP_NODE_MODULES"] = app.NodeModulesDirectory
             };
-            await RunCheckedAsync(tools.Pnpm, $"install --frozen-lockfile --store-dir {Quote(paths.PnpmStore)}", app.SourceDirectory, cancellationToken, env);
+            await RunCheckedAsync(
+                tools.Pnpm,
+                ["install", "--frozen-lockfile", "--store-dir", paths.PnpmStore],
+                app.SourceDirectory,
+                cancellationToken,
+                env);
             var sourceNodeModules = Path.Combine(app.SourceDirectory, "node_modules");
             if (Directory.Exists(sourceNodeModules) && !Directory.Exists(app.NodeModulesDirectory))
             {
@@ -168,9 +173,12 @@ public sealed class AppInstaller
 
     internal static string SafeCombine(string root, string relative)
     {
-        var fullRoot = Path.GetFullPath(root);
+        var fullRoot = Path.GetFullPath(root)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var fullPath = Path.GetFullPath(Path.Combine(fullRoot, relative));
-        if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+        var rootPrefix = fullRoot + Path.DirectorySeparatorChar;
+        if (!fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase) &&
+            !fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Path escapes the checkout directory.");
         }
@@ -199,7 +207,8 @@ public sealed class AppInstaller
     {
         foreach (var directory in Directory.EnumerateDirectories(root))
         {
-            if (Path.GetFileName(directory).Equals(".git", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetFileName(directory).Equals(".git", StringComparison.OrdinalIgnoreCase) ||
+                IsReparsePoint(directory))
             {
                 continue;
             }
@@ -216,12 +225,18 @@ public sealed class AppInstaller
     {
         foreach (var file in Directory.EnumerateFiles(root))
         {
+            if (IsReparsePoint(file))
+            {
+                continue;
+            }
+
             yield return file;
         }
 
         foreach (var directory in Directory.EnumerateDirectories(root))
         {
-            if (Path.GetFileName(directory).Equals(".git", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetFileName(directory).Equals(".git", StringComparison.OrdinalIgnoreCase) ||
+                IsReparsePoint(directory))
             {
                 continue;
             }
@@ -241,7 +256,7 @@ public sealed class AppInstaller
 
     private static async Task RunCheckedAsync(
         string fileName,
-        string arguments,
+        IEnumerable<string> arguments,
         string workingDirectory,
         CancellationToken cancellationToken,
         IDictionary<string, string>? environment = null)
@@ -253,8 +268,8 @@ public sealed class AppInstaller
         }
     }
 
-    private static string Quote(string value)
+    private static bool IsReparsePoint(string path)
     {
-        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+        return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
     }
 }

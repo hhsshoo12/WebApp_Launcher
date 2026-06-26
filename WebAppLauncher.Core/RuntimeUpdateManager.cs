@@ -106,35 +106,48 @@ public sealed class RuntimeUpdateManager
         }
 
         Directory.CreateDirectory(paths.RuntimeUpdates);
-        var work = Path.Combine(paths.RuntimeUpdates, $"v{bundle.Version}");
+        var safeVersion = WebAppPaths.SanitizeSegment(bundle.Version);
+        var work = Path.Combine(paths.RuntimeUpdates, WebAppPaths.SanitizeSegment($"v{bundle.Version}"));
         var staging = Path.Combine(work, "staging");
         if (Directory.Exists(work))
         {
             Directory.Delete(work, recursive: true);
         }
 
-        Directory.CreateDirectory(work);
-        var zipPath = Path.Combine(work, $"WAPL-Runtime-v{bundle.Version}.zip");
-        await DownloadAsync(bundle.ZipUrl, zipPath, progress, cancellationToken);
-        var checksumText = await client.GetStringAsync(bundle.ChecksumUrl, cancellationToken);
-        var expected = Regex.Match(checksumText, @"\b[a-fA-F0-9]{64}\b").Value;
-        if (expected.Length != 64)
+        try
         {
-            throw new InvalidDataException("Runtime checksum file does not contain a SHA-256 value.");
-        }
-
-        await using (var stream = File.OpenRead(zipPath))
-        {
-            var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
-            if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
+            Directory.CreateDirectory(work);
+            var zipPath = Path.Combine(work, $"WAPL-Runtime-v{safeVersion}.zip");
+            await DownloadAsync(bundle.ZipUrl, zipPath, progress, cancellationToken);
+            var checksumText = await client.GetStringAsync(bundle.ChecksumUrl, cancellationToken);
+            var expected = Regex.Match(checksumText, @"\b[a-fA-F0-9]{64}\b").Value;
+            if (expected.Length != 64)
             {
-                throw new InvalidDataException("Runtime archive SHA-256 verification failed.");
+                throw new InvalidDataException("Runtime checksum file does not contain a SHA-256 value.");
             }
-        }
 
-        ExtractSafely(zipPath, staging);
-        ValidateStaging(staging);
-        return bundle with { Status = "downloaded", StagingDirectory = staging };
+            await using (var stream = File.OpenRead(zipPath))
+            {
+                var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Runtime archive SHA-256 verification failed.");
+                }
+            }
+
+            ExtractSafely(zipPath, staging);
+            ValidateStaging(staging);
+            return bundle with { Status = "downloaded", StagingDirectory = staging };
+        }
+        catch
+        {
+            if (Directory.Exists(work))
+            {
+                Directory.Delete(work, recursive: true);
+            }
+
+            throw;
+        }
     }
 
     public string? ReadInstalledVersion()
@@ -214,10 +227,15 @@ public sealed class RuntimeUpdateManager
 
     private static void ValidateStaging(string staging)
     {
-        foreach (var required in new[] { "runtime-manifest.toml", "runtime", "tools", "LICENSES" })
+        if (!File.Exists(Path.Combine(staging, "runtime-manifest.toml")))
+        {
+            throw new InvalidDataException("Runtime archive is missing runtime-manifest.toml.");
+        }
+
+        foreach (var required in new[] { "runtime", "tools", "LICENSES" })
         {
             var path = Path.Combine(staging, required);
-            if (!File.Exists(path) && !Directory.Exists(path))
+            if (!Directory.Exists(path))
             {
                 throw new InvalidDataException($"Runtime archive is missing {required}.");
             }

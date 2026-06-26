@@ -39,24 +39,24 @@ public sealed class GitSourceResolver
                 }
 
                 await RunCheckedAsync(
-                    $"clone --no-checkout {Quote(url)} {Quote(cacheDirectory)}",
+                    ["clone", "--no-checkout", url, cacheDirectory],
                     paths.GitCache,
                     cancellationToken);
             }
 
-            await RunCheckedAsync("remote set-url origin " + Quote(url), cacheDirectory, cancellationToken);
+            await RunCheckedAsync(["remote", "set-url", "origin", url], cacheDirectory, cancellationToken);
             var branch = source.Branch == "*"
                 ? await ResolveDefaultBranchAsync(url, cacheDirectory, cancellationToken)
                 : source.Branch;
 
             await RunCheckedAsync(
-                $"fetch --prune origin {Quote(branch)}",
+                ["fetch", "--prune", "origin", branch],
                 cacheDirectory,
                 cancellationToken);
 
             var requestedCommit = source.Commit == "*" ? "FETCH_HEAD" : source.Commit;
             var commit = await ReadCheckedAsync(
-                $"rev-parse {Quote(requestedCommit + "^{commit}")}",
+                ["rev-parse", requestedCommit + "^{commit}"],
                 cacheDirectory,
                 cancellationToken);
             if (commit.Length != 40 || commit.Any(ch => !Uri.IsHexDigit(ch)))
@@ -77,11 +77,11 @@ public sealed class GitSourceResolver
                 commit);
             if (!Directory.Exists(snapshot))
             {
-                await RunCheckedAsync($"checkout --force {Quote(commit)}", cacheDirectory, cancellationToken);
+                await RunCheckedAsync(["checkout", "--force", commit], cacheDirectory, cancellationToken);
                 var temporary = snapshot + $".tmp-{Guid.NewGuid():N}";
                 try
                 {
-                    CopySnapshot(cacheDirectory, temporary);
+                    AppInstaller.CopyDirectory(cacheDirectory, temporary);
                     Directory.CreateDirectory(Path.GetDirectoryName(snapshot)!);
                     Directory.Move(temporary, snapshot);
                 }
@@ -108,7 +108,7 @@ public sealed class GitSourceResolver
         CancellationToken cancellationToken)
     {
         var output = await ReadCheckedAsync(
-            $"ls-remote --symref {Quote(url)} HEAD",
+            ["ls-remote", "--symref", url, "HEAD"],
             workingDirectory,
             cancellationToken);
         var prefix = "ref: refs/heads/";
@@ -124,7 +124,7 @@ public sealed class GitSourceResolver
     }
 
     private async Task RunCheckedAsync(
-        string arguments,
+        IEnumerable<string> arguments,
         string workingDirectory,
         CancellationToken cancellationToken)
     {
@@ -143,7 +143,7 @@ public sealed class GitSourceResolver
     }
 
     private async Task<string> ReadCheckedAsync(
-        string arguments,
+        IEnumerable<string> arguments,
         string workingDirectory,
         CancellationToken cancellationToken)
     {
@@ -158,29 +158,5 @@ public sealed class GitSourceResolver
         }
 
         return result.StandardOutput.Trim();
-    }
-
-    private static string Quote(string value)
-    {
-        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
-    }
-
-    private static void CopySnapshot(string source, string destination)
-    {
-        Directory.CreateDirectory(destination);
-        foreach (var file in Directory.EnumerateFiles(source))
-        {
-            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
-        }
-
-        foreach (var directory in Directory.EnumerateDirectories(source))
-        {
-            if (Path.GetFileName(directory).Equals(".git", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            CopySnapshot(directory, Path.Combine(destination, Path.GetFileName(directory)));
-        }
     }
 }

@@ -25,13 +25,13 @@ public sealed class RuntimeInspector
         var versions = ReadManagedVersions();
         var specs = new[]
         {
-            new RuntimeSpec("python313", "Python 3.13", VersionOf("python313"), paths.GetPythonExecutable("python313"), "--version"),
-            new RuntimeSpec("python314", "Python 3.14", VersionOf("python314"), paths.GetPythonExecutable("python314"), "--version"),
-            new RuntimeSpec("nodejs-lts-22", "Node.js LTS 22", VersionOf("nodejs-lts-22"), paths.GetNodeExecutable("nodejs-lts-22"), "--version"),
-            new RuntimeSpec("nodejs-lts-24", "Node.js LTS 24", VersionOf("nodejs-lts-24"), paths.GetNodeExecutable("nodejs-lts-24"), "--version"),
-            new RuntimeSpec("git", "Git", VersionOf("git"), paths.GitExecutable, "--version"),
-            new RuntimeSpec("uv", "uv", VersionOf("uv"), paths.UvExecutable, "--version"),
-            new RuntimeSpec("pnpm", "pnpm", VersionOf("pnpm"), ResolvePnpmExecutable(), "--version")
+            new RuntimeSpec("python313", "Python 3.13", VersionOf("python313"), paths.GetPythonExecutable("python313"), ["--version"]),
+            new RuntimeSpec("python314", "Python 3.14", VersionOf("python314"), paths.GetPythonExecutable("python314"), ["--version"]),
+            new RuntimeSpec("nodejs-lts-22", "Node.js LTS 22", VersionOf("nodejs-lts-22"), paths.GetNodeExecutable("nodejs-lts-22"), ["--version"]),
+            new RuntimeSpec("nodejs-lts-24", "Node.js LTS 24", VersionOf("nodejs-lts-24"), paths.GetNodeExecutable("nodejs-lts-24"), ["--version"]),
+            new RuntimeSpec("git", "Git", VersionOf("git"), paths.GitExecutable, ["--version"]),
+            new RuntimeSpec("uv", "uv", VersionOf("uv"), paths.UvExecutable, ["--version"]),
+            new RuntimeSpec("pnpm", "pnpm", VersionOf("pnpm"), ResolvePnpmExecutable(), ["--version"])
         };
 
         return await Task.WhenAll(specs.Select(spec => InspectAsync(spec, cancellationToken)));
@@ -56,15 +56,9 @@ public sealed class RuntimeInspector
 
         try
         {
-            var executable = spec.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
-                ? Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe"
-                : spec.Path;
-            var arguments = spec.Path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
-                ? $"/d /c \"\"{spec.Path}\" {spec.Arguments}\""
-                : spec.Arguments;
             var result = await CommandRunner.RunAsync(
-                executable,
-                arguments,
+                spec.Path,
+                spec.Arguments,
                 Path.GetDirectoryName(spec.Path)!,
                 cancellationToken: cancellationToken);
             var output = $"{result.StandardOutput} {result.StandardError}".Trim();
@@ -151,5 +145,5 @@ public sealed class RuntimeInspector
         string Name,
         string ExpectedVersion,
         string Path,
-        string Arguments);
+        IReadOnlyList<string> Arguments);
 }

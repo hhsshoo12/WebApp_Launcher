@@ -7,13 +7,14 @@ public static class CommandRunner
 {
     public static async Task<CommandResult> RunAsync(
         string fileName,
-        string arguments,
+        IEnumerable<string> arguments,
         string workingDirectory,
         IDictionary<string, string>? environment = null,
         CancellationToken cancellationToken = default)
     {
-        var startInfo = new ProcessStartInfo(fileName, arguments)
+        var startInfo = new ProcessStartInfo
         {
+            FileName = fileName,
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -22,6 +23,20 @@ public static class CommandRunner
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+
+        if (fileName.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
+            fileName.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
+        {
+            startInfo.FileName = Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe";
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(fileName);
+        }
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
         if (environment is not null)
         {

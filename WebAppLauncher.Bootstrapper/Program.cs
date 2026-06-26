@@ -371,12 +371,20 @@ internal static class Bootstrapper
                 ReportStageProgress("install", item.Name, stageIndex, totalStages, 70, "설치 프로그램 실행 중");
                 await RunInstallerAsync(
                     downloadedFile,
-                    $"/quiet InstallAllUsers=0 TargetDir={Quote(destination)} Include_launcher=0 PrependPath=0 Shortcuts=0 Include_test=0");
+                    [
+                        "/quiet",
+                        "InstallAllUsers=0",
+                        $"TargetDir={destination}",
+                        "Include_launcher=0",
+                        "PrependPath=0",
+                        "Shortcuts=0",
+                        "Include_test=0"
+                    ]);
                 break;
 
             case "7z-sfx":
                 ReportStageProgress("extract", item.Name, stageIndex, totalStages, 70, "압축 해제 중");
-                await RunInstallerAsync(downloadedFile, $"-y -o{Quote(destination)}");
+                await RunInstallerAsync(downloadedFile, ["-y", $"-o{destination}"]);
                 FlattenSingleRootDirectory(destination);
                 break;
 
@@ -536,13 +544,18 @@ internal static class Bootstrapper
         Console.WriteLine($"@@WEBAPP_PROGRESS {payload}");
     }
 
-    private static async Task RunInstallerAsync(string fileName, string arguments)
+    private static async Task RunInstallerAsync(string fileName, IEnumerable<string> arguments)
     {
-        var startInfo = new ProcessStartInfo(fileName, arguments)
+        var startInfo = new ProcessStartInfo(fileName)
         {
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to start {fileName}.");
         await process.WaitForExitAsync();
         if (process.ExitCode != 0)
@@ -584,11 +597,6 @@ internal static class Bootstrapper
         }
 
         return fullPath;
-    }
-
-    private static string Quote(string value)
-    {
-        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     }
 
     private static string? GetOption(string[] args, string name)

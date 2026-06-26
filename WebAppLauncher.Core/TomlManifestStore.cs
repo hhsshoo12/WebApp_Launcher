@@ -35,7 +35,7 @@ public static class TomlManifestStore
             ReadStorage(document),
             ReadWindow(document),
             ReadOptionalSource(document));
-        ManifestValidator.Validate(manifest);
+        ManifestValidator.Validate(manifest, allowLegacyPersistentStorage: true);
         return manifest;
     }
 

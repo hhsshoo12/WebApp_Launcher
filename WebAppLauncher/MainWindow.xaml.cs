@@ -68,6 +68,7 @@ public partial class MainWindow : Window
                 UiHost,
                 uiDirectory,
                 CoreWebView2HostResourceAccessKind.DenyCors);
+            Browser.CoreWebView2.NavigationStarting += LauncherNavigationStarting;
             Browser.CoreWebView2.WebMessageReceived += WebMessageReceived;
             Browser.Source = new Uri($"https://{UiHost}/index.html");
         }
@@ -90,6 +91,12 @@ public partial class MainWindow : Window
 
     private async void WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
+        if (!IsTrustedLauncherSource(e.Source))
+        {
+            SendError("신뢰할 수 없는 런처 UI 메시지를 차단했습니다.");
+            return;
+        }
+
         LauncherCommand? command;
         try
         {
@@ -352,6 +359,11 @@ public partial class MainWindow : Window
     private void Remove(LauncherCommand command)
     {
         var app = ResolveApp(command);
+        if (activeSessions.Any(session => IsSameApp(session.Launch.App, app)))
+        {
+            throw new InvalidOperationException("실행 중인 앱은 종료한 뒤 삭제할 수 있습니다.");
+        }
+
         installer.Remove(app.Manifest.Package.Id, app.Manifest.Package.Version);
         preparedUpdates.Remove(app.Manifest.Package.Id);
         updateStatuses.Remove(app.Manifest.Package.Id);
@@ -779,14 +791,21 @@ public partial class MainWindow : Window
 
         var executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("런처 실행 파일 경로를 확인할 수 없습니다.");
-        Process.Start(new ProcessStartInfo(
-            bootstrapper,
-            $"apply-runtime --staging {Quote(runtimeBundle.StagingDirectory)} " +
-            $"--wait-pid {Environment.ProcessId} --restart {Quote(executable)} --root {Quote(paths.Root)}")
+        var startInfo = new ProcessStartInfo(bootstrapper)
         {
             UseShellExecute = false,
             CreateNoWindow = true
-        });
+        };
+        startInfo.ArgumentList.Add("apply-runtime");
+        startInfo.ArgumentList.Add("--staging");
+        startInfo.ArgumentList.Add(runtimeBundle.StagingDirectory);
+        startInfo.ArgumentList.Add("--wait-pid");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+        startInfo.ArgumentList.Add("--restart");
+        startInfo.ArgumentList.Add(executable);
+        startInfo.ArgumentList.Add("--root");
+        startInfo.ArgumentList.Add(paths.Root);
+        Process.Start(startInfo);
         Application.Current.Shutdown();
     }
 
@@ -816,6 +835,23 @@ public partial class MainWindow : Window
         Browser.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload, JsonOptions));
     }
 
+    private static void LauncherNavigationStarting(
+        object? sender,
+        CoreWebView2NavigationStartingEventArgs e)
+    {
+        if (!IsTrustedLauncherSource(e.Uri))
+        {
+            e.Cancel = true;
+        }
+    }
+
+    private static bool IsTrustedLauncherSource(string source)
+    {
+        return Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
+               uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) &&
+               uri.Host.Equals(UiHost, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string DescribeRuntime(RuntimeInfo runtime)
     {
         var values = new[] { runtime.Python, runtime.Node }
@@ -831,11 +867,6 @@ public partial class MainWindow : Window
                left.Manifest.Package.Version.Equals(
                    right.Manifest.Package.Version,
                    StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string Quote(string value)
-    {
-        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     }
 
     private static string? ReadIconDataUri(InstalledApp app)
@@ -871,10 +902,13 @@ public partial class MainWindow : Window
 
     private static void OpenFolder(string path)
     {
-        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"")
+        var startInfo = new ProcessStartInfo("explorer.exe")
         {
-            UseShellExecute = true
-        });
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add(path);
+        Process.Start(startInfo);
     }
 
     private sealed record LauncherCommand(

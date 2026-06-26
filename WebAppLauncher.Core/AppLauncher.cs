@@ -68,7 +68,7 @@ public sealed class AppLauncher
                 ? tools.ResolveNode(app.Manifest.Runtime.Node)
                 : throw new InvalidOperationException("Backend entry must be app.py or app.js.");
 
-        var startInfo = new ProcessStartInfo(executable, Quote(serverPath))
+        var startInfo = new ProcessStartInfo(executable)
         {
             WorkingDirectory = app.SourceDirectory,
             UseShellExecute = false,
@@ -78,6 +78,7 @@ public sealed class AppLauncher
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        startInfo.ArgumentList.Add(serverPath);
 
         startInfo.Environment["WEBAPP_HOST"] = app.Manifest.Network.Host;
         startInfo.Environment["WEBAPP_PORT"] = port.ToString();
@@ -101,22 +102,30 @@ public sealed class AppLauncher
     {
         await using var stream = new FileStream(logPath, FileMode.Create, FileAccess.Write, FileShare.Read);
         await using var writer = new StreamWriter(stream, Encoding.UTF8);
-        var stdout = CopyAsync(process.StandardOutput, writer, "OUT");
-        var stderr = CopyAsync(process.StandardError, writer, "ERR");
+        using var writerLock = new SemaphoreSlim(1, 1);
+        var stdout = CopyAsync(process.StandardOutput, writer, writerLock, "OUT");
+        var stderr = CopyAsync(process.StandardError, writer, writerLock, "ERR");
         await Task.WhenAll(stdout, stderr);
     }
 
-    private static async Task CopyAsync(StreamReader reader, StreamWriter writer, string prefix)
+    private static async Task CopyAsync(
+        StreamReader reader,
+        StreamWriter writer,
+        SemaphoreSlim writerLock,
+        string prefix)
     {
         while (await reader.ReadLineAsync() is { } line)
         {
-            await writer.WriteLineAsync($"[{prefix}] {line}");
-            await writer.FlushAsync();
+            await writerLock.WaitAsync();
+            try
+            {
+                await writer.WriteLineAsync($"[{prefix}] {line}");
+                await writer.FlushAsync();
+            }
+            finally
+            {
+                writerLock.Release();
+            }
         }
-    }
-
-    private static string Quote(string value)
-    {
-        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     }
 }

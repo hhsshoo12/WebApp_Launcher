@@ -63,8 +63,15 @@ public sealed class WebAppPaths
 
     public static string SanitizeSegment(string value)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var chars = value.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray();
-        return new string(chars);
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        invalid.Add(Path.DirectorySeparatorChar);
+        invalid.Add(Path.AltDirectorySeparatorChar);
+
+        var chars = value
+            .Trim()
+            .Select(ch => invalid.Contains(ch) || char.IsControl(ch) ? '_' : ch)
+            .ToArray();
+        var sanitized = new string(chars).Trim().TrimEnd('.', ' ');
+        return sanitized is "" or "." or ".." ? "_" : sanitized;
     }
 }
