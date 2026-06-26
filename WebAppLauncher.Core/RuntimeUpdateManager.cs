@@ -19,6 +19,7 @@ public sealed record RuntimeBundleInfo(
 public sealed class RuntimeUpdateManager
 {
     public const string Repository = "hhsshoo12/WebApp_Launcher";
+    public const string RuntimeTagPrefix = "runtime-";
     private static readonly Regex AssetPattern = new(
         @"^WAPL-Runtime-v(?<version>[^/]+)\.zip$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -40,7 +41,7 @@ public sealed class RuntimeUpdateManager
         try
         {
             using var response = await client.GetAsync(
-                $"https://api.github.com/repos/{Repository}/releases/latest",
+                $"https://api.github.com/repos/{Repository}/releases?per_page=30",
                 cancellationToken);
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
@@ -56,19 +57,37 @@ public sealed class RuntimeUpdateManager
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(
                 await response.Content.ReadAsStringAsync(cancellationToken));
-            var assets = document.RootElement.GetProperty("assets")
-                .EnumerateArray()
-                .Select(asset => new
+            var release = document.RootElement.EnumerateArray()
+                .Where(element => element.TryGetProperty("draft", out var draft) && !draft.GetBoolean())
+                .Where(element => element.TryGetProperty("tag_name", out var tag) &&
+                                  tag.GetString() is { } tagName &&
+                                  tagName.StartsWith(RuntimeTagPrefix, StringComparison.OrdinalIgnoreCase))
+                .Select(element => new
                 {
-                    Name = asset.GetProperty("name").GetString() ?? string.Empty,
-                    Url = asset.GetProperty("browser_download_url").GetString() ?? string.Empty
+                    TagName = element.GetProperty("tag_name").GetString() ?? string.Empty,
+                    PublishedAt = element.TryGetProperty("published_at", out var published) &&
+                                  published.ValueKind == JsonValueKind.String &&
+                                  DateTimeOffset.TryParse(published.GetString(), out var parsed)
+                        ? parsed
+                        : DateTimeOffset.MinValue,
+                    Assets = element.GetProperty("assets").EnumerateArray()
+                        .Select(asset => new
+                        {
+                            Name = asset.GetProperty("name").GetString() ?? string.Empty,
+                            Url = asset.GetProperty("browser_download_url").GetString() ?? string.Empty
+                        })
+                        .ToArray()
                 })
-                .ToArray();
-            var zip = assets
+                .OrderByDescending(release => release.PublishedAt)
+                .FirstOrDefault()
+                ?? throw new InvalidOperationException(
+                    $"No '{RuntimeTagPrefix}*' release with a WAPL-Runtime-v*.zip asset was found.");
+
+            var zip = release.Assets
                 .Select(asset => new { Asset = asset, Match = AssetPattern.Match(asset.Name) })
                 .FirstOrDefault(value => value.Match.Success)
                 ?? throw new InvalidOperationException("WAPL-Runtime-v*.zip release asset was not found.");
-            var checksum = assets.FirstOrDefault(asset =>
+            var checksum = release.Assets.FirstOrDefault(asset =>
                     asset.Name.Equals(zip.Asset.Name + ".sha256", StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidOperationException($"{zip.Asset.Name}.sha256 release asset was not found.");
             var installed = ReadInstalledVersion();

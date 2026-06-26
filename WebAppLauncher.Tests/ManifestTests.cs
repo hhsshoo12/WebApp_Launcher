@@ -363,6 +363,116 @@ public sealed class ManifestTests
     }
 
     [Fact]
+    public async Task RuntimeUpdateCheckPicksLatestRuntimeTaggedRelease()
+    {
+        using var temp = new TempDirectory();
+        var paths = new WebAppPaths(temp.Path);
+        paths.EnsureRootLayout();
+        var payload = ReleaseListJson(
+            Release("v0.1.0", "2026-06-20T00:00:00Z"),
+            Release("runtime-v0.1", "2026-06-26T00:00:00Z",
+                "WAPL-Runtime-v0.1.zip", "https://example.test/runtime.zip",
+                "WAPL-Runtime-v0.1.zip.sha256", "https://example.test/runtime.zip.sha256"),
+            Release("v0.0.9", "2026-06-19T00:00:00Z"));
+        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
+        {
+            ["https://api.github.com/repos/hhsshoo12/WebApp_Launcher/releases?per_page=30"] =
+                Encoding.UTF8.GetBytes(payload)
+        }));
+        var manager = new RuntimeUpdateManager(paths, client);
+
+        var bundle = await manager.CheckAsync();
+
+        Assert.Equal("available", bundle.Status);
+        Assert.Equal("0.1", bundle.Version);
+        Assert.Equal("https://example.test/runtime.zip", bundle.ZipUrl);
+        Assert.Equal("https://example.test/runtime.zip.sha256", bundle.ChecksumUrl);
+    }
+
+    [Fact]
+    public async Task RuntimeUpdateCheckSkipsReleasesWithoutRuntimePrefix()
+    {
+        using var temp = new TempDirectory();
+        var paths = new WebAppPaths(temp.Path);
+        paths.EnsureRootLayout();
+        var payload = ReleaseListJson(
+            Release("v0.1.0", "2026-06-26T00:00:00Z", assets: []),
+            Release("nightly-2026-06-26", "2026-06-26T01:00:00Z", assets: []));
+        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
+        {
+            ["https://api.github.com/repos/hhsshoo12/WebApp_Launcher/releases?per_page=30"] =
+                Encoding.UTF8.GetBytes(payload)
+        }));
+        var manager = new RuntimeUpdateManager(paths, client);
+
+        var bundle = await manager.CheckAsync();
+
+        Assert.Equal("error", bundle.Status);
+        Assert.Contains("runtime-*", bundle.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RuntimeUpdateCheckReportsCurrentWhenInstalledVersionMatches()
+    {
+        using var temp = new TempDirectory();
+        var paths = new WebAppPaths(temp.Path);
+        paths.EnsureRootLayout();
+        File.WriteAllText(
+            Path.Combine(paths.Root, "runtime-manifest.toml"),
+            "[runtime]\nbundle_version = \"0.1\"\n",
+            Encoding.UTF8);
+        var payload = ReleaseListJson(
+            Release("runtime-v0.1", "2026-06-26T00:00:00Z",
+                "WAPL-Runtime-v0.1.zip", "https://example.test/runtime.zip",
+                "WAPL-Runtime-v0.1.zip.sha256", "https://example.test/runtime.zip.sha256"));
+        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
+        {
+            ["https://api.github.com/repos/hhsshoo12/WebApp_Launcher/releases?per_page=30"] =
+                Encoding.UTF8.GetBytes(payload)
+        }));
+        var manager = new RuntimeUpdateManager(paths, client);
+
+        var bundle = await manager.CheckAsync();
+
+        Assert.Equal("current", bundle.Status);
+        Assert.Equal("0.1", bundle.Version);
+        Assert.Equal("0.1", bundle.InstalledVersion);
+    }
+
+    private static string ReleaseListJson(params string[] releases)
+    {
+        return "[\n  " + string.Join(",\n  ", releases) + "\n]";
+    }
+
+    private static string Release(
+        string tag,
+        string publishedAt,
+        params string[] assets)
+    {
+        var assetEntries = new List<string>();
+        for (var i = 0; i < assets.Length; i += 2)
+        {
+            assetEntries.Add($$"""
+                  {
+                    "name": "{{assets[i]}}",
+                    "browser_download_url": "{{assets[i + 1]}}"
+                  }
+            """);
+        }
+        var assetJson = assetEntries.Count == 0
+            ? "[]"
+            : "[\n    " + string.Join(",\n    ", assetEntries) + "\n  ]";
+        return $$"""
+              {
+                "tag_name": "{{tag}}",
+                "published_at": "{{publishedAt}}",
+                "draft": false,
+                "assets": {{assetJson}}
+              }
+        """;
+    }
+
+    [Fact]
     public async Task RuntimeUpdateRejectsPathTraversalArchive()
     {
         using var temp = new TempDirectory();
