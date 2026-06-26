@@ -1,37 +1,14 @@
-# Pinned runtime/tool catalog for WebAppLauncher.Bootstrapper.
-# Update deliberately; these URLs are part of the reproducible runtime contract.
+# Runtime bundle for WebApp Launcher.
+# The bundle zip is hosted on the project's GitHub Releases and contains
+# runtime/, tools/, LICENSES/, and runtime-manifest.toml. The Bootstrapper
+# verifies the SHA-256 checksum before extracting, mirroring the
+# RuntimeUpdateManager pattern used for live updates.
+#
+# Bump [runtime].bundle_version in runtime-manifest.toml (and publish a
+# new WAPL-Runtime-v*.zip asset) when runtime versions change.
 
-[archive.python313]
-type = "python-installer"
-url = "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe"
-destination = "runtime/python313"
-
-[archive.python314]
-type = "python-installer"
-url = "https://www.python.org/ftp/python/3.14.6/python-3.14.6-amd64.exe"
-destination = "runtime/python314"
-
-[archive.nodejs-lts-22]
-type = "zip"
-url = "https://nodejs.org/dist/v22.23.0/node-v22.23.0-win-x64.zip"
-destination = "runtime/nodejs-lts-22"
-
-[archive.nodejs-lts-24]
-type = "zip"
-url = "https://nodejs.org/dist/v24.17.0/node-v24.17.0-win-x64.zip"
-destination = "runtime/nodejs-lts-24"
-
-[archive.git]
-type = "7z-sfx"
-url = "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/PortableGit-2.54.0-64-bit.7z.exe"
-destination = "tools/git"
-
-[archive.uv]
-type = "zip"
-url = "https://github.com/astral-sh/uv/releases/download/0.11.23/uv-x86_64-pc-windows-msvc.zip"
-destination = "tools/uv"
-
-[archive.pnpm]
-type = "zip"
-url = "https://github.com/pnpm/pnpm/releases/download/v11.8.0/pnpm-win32-x64.zip"
-destination = "tools/pnpm"
+[bundle.runtime]
+type = "bundle-zip"
+url = "https://github.com/hhsshoo12/WebApp_Launcher/releases/download/v0.1.0/WAPL-Runtime-v0.1.zip"
+sha256 = "c4dfafef9d76a477d8b8ecc2a271b69f2156595777b495445be7ecc48e816963"
+destination = "."

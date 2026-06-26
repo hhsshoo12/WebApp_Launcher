@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using WebAppLauncher.Core;
 
 return await Bootstrapper.RunAsync(args);
@@ -58,7 +60,6 @@ internal static class Bootstrapper
                 if (catalog is not null)
                 {
                     await InstallCatalogAsync(paths, catalogData!, 1, totalStages);
-                    CopyRuntimeManifest(catalog, paths.Root);
                 }
 
                 ReportProgress("complete", "bootstrap", totalStages, totalStages, 100, "설치 환경 준비 완료");
@@ -71,7 +72,6 @@ internal static class Bootstrapper
                 var catalog = GetOption(args, "--catalog") ?? throw new InvalidOperationException("catalog requires --catalog <path>.");
                 var catalogData = RuntimeCatalog.Load(catalog);
                 await InstallCatalogAsync(paths, catalogData, 0, catalogData.Items.Count);
-                CopyRuntimeManifest(catalog, paths.Root);
                 Console.WriteLine($"Catalog install complete: {paths.Root}");
                 return 0;
             }
@@ -307,14 +307,22 @@ internal static class Bootstrapper
             var item = catalog.Items[itemIndex];
             var stageIndex = firstStageIndex + itemIndex;
             var destination = SafeCombine(paths.Root, item.Destination);
-            if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any())
+            if (IsBundleInstalled(paths, item))
             {
-                Console.WriteLine($"Skip existing {item.Name}: {destination}");
+                Console.WriteLine($"Skip existing {item.Name}");
                 ReportStageProgress("skip", item.Name, stageIndex, totalStages, 100, "이미 설치됨");
                 continue;
             }
 
-            Directory.CreateDirectory(destination);
+            if (item.Kind == RuntimeCatalogItemKind.Bundle)
+            {
+                Directory.CreateDirectory(paths.Root);
+            }
+            else
+            {
+                Directory.CreateDirectory(destination);
+            }
+
             var extension = Path.GetExtension(item.Url.LocalPath);
             if (string.IsNullOrWhiteSpace(extension))
             {
@@ -342,15 +350,19 @@ internal static class Bootstrapper
         }
     }
 
-    private static void CopyRuntimeManifest(string catalogPath, string root)
+    private static bool IsBundleInstalled(WebAppPaths paths, RuntimeCatalogItem item)
     {
-        var source = Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(catalogPath))!,
-            "runtime-manifest.toml");
-        if (File.Exists(source))
+        if (item.Kind != RuntimeCatalogItemKind.Bundle)
         {
-            File.Copy(source, Path.Combine(root, "runtime-manifest.toml"), overwrite: true);
+            var target = SafeCombine(paths.Root, item.Destination);
+            return Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any();
         }
+
+        return File.Exists(Path.Combine(paths.Root, "runtime-manifest.toml")) &&
+               Directory.Exists(Path.Combine(paths.Root, "runtime")) &&
+               Directory.EnumerateFileSystemEntries(Path.Combine(paths.Root, "runtime")).Any() &&
+               Directory.Exists(Path.Combine(paths.Root, "tools")) &&
+               Directory.EnumerateFileSystemEntries(Path.Combine(paths.Root, "tools")).Any();
     }
 
     private static async Task InstallItemAsync(
@@ -362,6 +374,12 @@ internal static class Bootstrapper
     {
         switch (item.Type.ToLowerInvariant())
         {
+            case "bundle-zip":
+                ReportStageProgress("verify", item.Name, stageIndex, totalStages, 75, "체크섬 확인 중");
+                VerifySha256(downloadedFile, item, item.Name);
+                await ExtractBundleAsync(downloadedFile, destination, item.Name, stageIndex, totalStages);
+                break;
+
             case "zip":
                 await ExtractZipAsync(downloadedFile, destination, item.Name, stageIndex, totalStages);
                 FlattenSingleRootDirectory(destination);
@@ -396,6 +414,97 @@ internal static class Bootstrapper
 
             default:
                 throw new InvalidDataException($"Unsupported catalog archive type '{item.Type}' for {item.Name}.");
+        }
+    }
+
+    private static void VerifySha256(string downloadedFile, RuntimeCatalogItem item, string itemName)
+    {
+        if (string.IsNullOrWhiteSpace(item.Sha256))
+        {
+            throw new InvalidDataException(
+                $"Catalog item '{itemName}' is missing a sha256 entry; refusing to install an unverified bundle.");
+        }
+
+        var expected = item.Sha256.Trim().ToLowerInvariant();
+        if (expected.Length != 64 || !Regex.IsMatch(expected, "^[0-9a-f]{64}$"))
+        {
+            throw new InvalidDataException(
+                $"Catalog item '{itemName}' has an invalid sha256 value: {item.Sha256}");
+        }
+
+        using var stream = File.OpenRead(downloadedFile);
+        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (!actual.Equals(expected, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"{itemName} SHA-256 verification failed (expected {expected}, got {actual}).");
+        }
+    }
+
+    private static async Task ExtractBundleAsync(
+        string archivePath,
+        string destinationRoot,
+        string itemName,
+        int stageIndex,
+        int totalStages)
+    {
+        var staging = Path.Combine(Path.GetTempPath(), $"{itemName}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staging);
+        try
+        {
+            ReportStageProgress("extract", itemName, stageIndex, totalStages, 80, "압축 해제 중");
+            await Task.Run(() => ZipFile.ExtractToDirectory(archivePath, staging, overwriteFiles: true));
+            ValidateBundleLayout(staging);
+            ReportStageProgress("apply", itemName, stageIndex, totalStages, 92, "런타임 배치 중");
+            await Task.Run(() => MoveDirectoryContents(staging, destinationRoot));
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+            {
+                Directory.Delete(staging, recursive: true);
+            }
+        }
+    }
+
+    private static void ValidateBundleLayout(string staging)
+    {
+        foreach (var required in new[] { "runtime", "tools", "LICENSES", "runtime-manifest.toml" })
+        {
+            var path = Path.Combine(staging, required);
+            if (!Directory.Exists(path) && !File.Exists(path))
+            {
+                throw new InvalidDataException(
+                    $"Runtime bundle is missing required entry '{required}'.");
+            }
+        }
+    }
+
+    private static void MoveDirectoryContents(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var entry in Directory.EnumerateFileSystemEntries(source))
+        {
+            var name = Path.GetFileName(entry);
+            var target = Path.Combine(destination, name);
+            if (Directory.Exists(entry))
+            {
+                if (Directory.Exists(target))
+                {
+                    Directory.Delete(target, recursive: true);
+                }
+
+                Directory.Move(entry, target);
+            }
+            else
+            {
+                if (File.Exists(target))
+                {
+                    File.Delete(target);
+                }
+
+                File.Move(entry, target);
+            }
         }
     }
 
@@ -623,16 +732,29 @@ internal static class Bootstrapper
           apply-runtime --staging <path> --wait-pid <pid> --restart <launcher.exe> [--root <path>]
           webview2-status
 
-        Catalog format:
-          [archive.python313]
-          type = "python-installer"
-          url = "https://example.invalid/python313.exe"
-          destination = "runtime/python313"
+        Catalog format (single runtime bundle hosted on GitHub Releases):
+          [bundle.runtime]
+          type = "bundle-zip"
+          url = "https://github.com/.../WAPL-Runtime-v0.1.zip"
+          sha256 = "<64-char hex digest>"
+          destination = "."
         """);
     }
 }
 
-internal sealed record RuntimeCatalogItem(string Name, string Type, Uri Url, string Destination);
+internal enum RuntimeCatalogItemKind
+{
+    Archive,
+    Bundle,
+}
+
+internal sealed record RuntimeCatalogItem(
+    string Name,
+    string Type,
+    Uri Url,
+    string Destination,
+    string? Sha256,
+    RuntimeCatalogItemKind Kind);
 
 internal sealed class RuntimeCatalog
 {
@@ -677,13 +799,25 @@ internal sealed class RuntimeCatalog
         }
 
         var items = new List<RuntimeCatalogItem>();
-        foreach (var pair in sections.Where(pair => pair.Key.StartsWith("archive.", StringComparison.OrdinalIgnoreCase)))
+        foreach (var pair in sections)
         {
-            var name = pair.Key["archive.".Length..];
+            var kind = pair.Key.StartsWith("bundle.", StringComparison.OrdinalIgnoreCase)
+                ? RuntimeCatalogItemKind.Bundle
+                : pair.Key.StartsWith("archive.", StringComparison.OrdinalIgnoreCase)
+                    ? RuntimeCatalogItemKind.Archive
+                    : (RuntimeCatalogItemKind?)null;
+            if (kind is null)
+            {
+                continue;
+            }
+
+            var prefix = kind == RuntimeCatalogItemKind.Bundle ? "bundle." : "archive.";
+            var name = pair.Key[prefix.Length..];
             var type = GetOptional(pair.Value, "type") ?? "zip";
             var url = Get(pair.Value, "url", pair.Key);
-            var destination = Get(pair.Value, "destination", pair.Key);
-            items.Add(new RuntimeCatalogItem(name, type, new Uri(url), destination));
+            var destination = GetOptional(pair.Value, "destination") ?? ".";
+            var sha256 = GetOptional(pair.Value, "sha256");
+            items.Add(new RuntimeCatalogItem(name, type, new Uri(url), destination, sha256, kind.Value));
         }
 
         return new RuntimeCatalog(items);
