@@ -25,6 +25,8 @@ public sealed class GitSourceResolver
             throw new InvalidOperationException("Only GitHub sources are supported.");
         }
 
+        await EnsurePublicRepositoryAsync(source, cancellationToken);
+
         await GitLock.WaitAsync(cancellationToken);
         try
         {
@@ -99,6 +101,44 @@ public sealed class GitSourceResolver
         finally
         {
             GitLock.Release();
+        }
+    }
+
+    private static async Task EnsurePublicRepositoryAsync(
+        SourceInfo source,
+        CancellationToken cancellationToken)
+    {
+        var apiUrl = $"https://api.github.com/repos/{source.Owner}/{source.Repo}";
+        try
+        {
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Add("User-Agent", "WebAppLauncher");
+            using var response = await client.GetAsync(apiUrl, cancellationToken);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound ||
+                response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                throw new InvalidOperationException(
+                    $"GitHub 저장소 {source.Owner}/{source.Repo}에 접근할 수 없습니다. " +
+                    "Public Repository만 지원합니다.");
+            }
+
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (json.Contains("\"private\":true", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"GitHub 저장소 {source.Owner}/{source.Repo}는 Private Repository입니다. " +
+                    "Public Repository만 지원합니다.");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch
+        {
+            // API 호출 실패 시 clone 단계에서 자연스럽게 실패하도록 넘깁니다.
         }
     }
 
