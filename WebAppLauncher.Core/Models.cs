@@ -20,7 +20,17 @@ public sealed record EntryInfo(
     string? Mode = null,
     string? Server = null);
 
-public sealed record WindowInfo(int Width, int Height, bool Resizable, bool Devtools);
+public sealed record WindowInfo(
+    int Width,
+    int Height,
+    bool Resizable,
+    bool Devtools,
+    bool Transparent = false,
+    bool Borderless = false,
+    bool Fullscreen = false,
+    bool AlwaysOnTop = false,
+    bool StartMaximized = false,
+    string InstanceMode = "new_backend");
 
 public sealed record WapkManifest(
     int Format,
@@ -46,7 +56,24 @@ public sealed record WebAppManifest(
     EntryInfo Entry,
     NetworkInfo Network,
     StorageInfo Storage,
-    WindowInfo Window);
+    WindowInfo Window,
+    SourceInfo? Source = null);
+
+public sealed record ResolvedGitSource(
+    SourceInfo Requested,
+    string Branch,
+    string Commit,
+    string CheckoutDirectory);
+
+public sealed record AppUpdateStatus(
+    string PackageId,
+    string Name,
+    string InstalledVersion,
+    string InstalledCommit,
+    string? LatestVersion,
+    string? LatestCommit,
+    string Status,
+    string? Message = null);
 
 public sealed record InstalledApp(
     WebAppManifest Manifest,
@@ -78,6 +105,44 @@ public sealed record LaunchResult(
         if (Interlocked.Exchange(ref portReleased, 1) == 0)
         {
             ReleasePortAction?.Invoke();
+        }
+    }
+
+    public void StopBackend()
+    {
+        if (Process is not { } process)
+        {
+            ReleasePort();
+            return;
+        }
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(milliseconds: 5000);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+        }
+        finally
+        {
+            try
+            {
+                if (process.HasExited)
+                {
+                    ReleasePort();
+                }
+            }
+            catch (InvalidOperationException)
+            {
+            }
         }
     }
 }

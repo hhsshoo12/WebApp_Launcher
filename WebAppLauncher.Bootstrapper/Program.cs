@@ -32,6 +32,23 @@ internal static class Bootstrapper
             var paths = new WebAppPaths(root);
             paths.EnsureRootLayout();
 
+            if (command == "apply-runtime")
+            {
+                var staging = GetOption(args, "--staging")
+                    ?? throw new InvalidOperationException("apply-runtime requires --staging <path>.");
+                var waitPidText = GetOption(args, "--wait-pid")
+                    ?? throw new InvalidOperationException("apply-runtime requires --wait-pid <pid>.");
+                var restart = GetOption(args, "--restart")
+                    ?? throw new InvalidOperationException("apply-runtime requires --restart <path>.");
+                if (!int.TryParse(waitPidText, out var waitPid))
+                {
+                    throw new InvalidOperationException("--wait-pid must be an integer.");
+                }
+
+                await ApplyRuntimeUpdateAsync(paths, staging, waitPid, restart);
+                return 0;
+            }
+
             if (command is "install" or "all")
             {
                 var catalog = GetOption(args, "--catalog");
@@ -41,6 +58,7 @@ internal static class Bootstrapper
                 if (catalog is not null)
                 {
                     await InstallCatalogAsync(paths, catalogData!, 1, totalStages);
+                    CopyRuntimeManifest(catalog, paths.Root);
                 }
 
                 ReportProgress("complete", "bootstrap", totalStages, totalStages, 100, "설치 환경 준비 완료");
@@ -53,6 +71,7 @@ internal static class Bootstrapper
                 var catalog = GetOption(args, "--catalog") ?? throw new InvalidOperationException("catalog requires --catalog <path>.");
                 var catalogData = RuntimeCatalog.Load(catalog);
                 await InstallCatalogAsync(paths, catalogData, 0, catalogData.Items.Count);
+                CopyRuntimeManifest(catalog, paths.Root);
                 Console.WriteLine($"Catalog install complete: {paths.Root}");
                 return 0;
             }
@@ -110,6 +129,135 @@ internal static class Bootstrapper
             {
                 File.Delete(tempFile);
             }
+        }
+    }
+
+    private static async Task ApplyRuntimeUpdateAsync(
+        WebAppPaths paths,
+        string staging,
+        int waitPid,
+        string restart)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(waitPid);
+            await process.WaitForExitAsync();
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        var stagingRoot = Path.GetFullPath(staging);
+        var updatesRoot = Path.GetFullPath(paths.RuntimeUpdates) + Path.DirectorySeparatorChar;
+        if (!stagingRoot.StartsWith(updatesRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Runtime staging path is outside the update directory.");
+        }
+
+        foreach (var required in new[] { "runtime", "tools", "runtime-manifest.toml", "LICENSES" })
+        {
+            var candidate = Path.Combine(stagingRoot, required);
+            if (!Directory.Exists(candidate) && !File.Exists(candidate))
+            {
+                throw new InvalidDataException($"Runtime staging is missing {required}.");
+            }
+        }
+
+        var backup = Path.Combine(paths.RuntimeUpdates, $"backup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(backup);
+        var applied = false;
+        try
+        {
+            MoveExisting(paths.Runtime, Path.Combine(backup, "runtime"));
+            MoveExisting(paths.Tools, Path.Combine(backup, "tools"));
+            MoveExisting(
+                Path.Combine(paths.Root, "runtime-manifest.toml"),
+                Path.Combine(backup, "runtime-manifest.toml"));
+            MoveExisting(
+                Path.Combine(paths.Root, "LICENSES"),
+                Path.Combine(backup, "LICENSES"));
+
+            Directory.Move(Path.Combine(stagingRoot, "runtime"), paths.Runtime);
+            Directory.Move(Path.Combine(stagingRoot, "tools"), paths.Tools);
+            File.Move(
+                Path.Combine(stagingRoot, "runtime-manifest.toml"),
+                Path.Combine(paths.Root, "runtime-manifest.toml"));
+            Directory.Move(
+                Path.Combine(stagingRoot, "LICENSES"),
+                Path.Combine(paths.Root, "LICENSES"));
+            applied = true;
+        }
+        finally
+        {
+            if (!applied)
+            {
+                DeleteIfExists(paths.Runtime);
+                DeleteIfExists(paths.Tools);
+                DeleteIfExists(Path.Combine(paths.Root, "runtime-manifest.toml"));
+                DeleteIfExists(Path.Combine(paths.Root, "LICENSES"));
+                RestoreBackup(Path.Combine(backup, "runtime"), paths.Runtime);
+                RestoreBackup(Path.Combine(backup, "tools"), paths.Tools);
+                RestoreBackup(
+                    Path.Combine(backup, "runtime-manifest.toml"),
+                    Path.Combine(paths.Root, "runtime-manifest.toml"));
+                RestoreBackup(Path.Combine(backup, "LICENSES"), Path.Combine(paths.Root, "LICENSES"));
+            }
+        }
+
+        if (Directory.Exists(backup))
+        {
+            try
+            {
+                Directory.Delete(backup, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        Process.Start(new ProcessStartInfo(restart)
+        {
+            WorkingDirectory = Path.GetDirectoryName(restart)!,
+            UseShellExecute = true
+        });
+    }
+
+    private static void MoveExisting(string source, string destination)
+    {
+        if (Directory.Exists(source))
+        {
+            Directory.Move(source, destination);
+        }
+        else if (File.Exists(source))
+        {
+            File.Move(source, destination);
+        }
+    }
+
+    private static void RestoreBackup(string source, string destination)
+    {
+        if (Directory.Exists(source))
+        {
+            Directory.Move(source, destination);
+        }
+        else if (File.Exists(source))
+        {
+            File.Move(source, destination);
+        }
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        else if (File.Exists(path))
+        {
+            File.Delete(path);
         }
     }
 
@@ -191,6 +339,17 @@ internal static class Bootstrapper
                     File.Delete(tempFile);
                 }
             }
+        }
+    }
+
+    private static void CopyRuntimeManifest(string catalogPath, string root)
+    {
+        var source = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(catalogPath))!,
+            "runtime-manifest.toml");
+        if (File.Exists(source))
+        {
+            File.Copy(source, Path.Combine(root, "runtime-manifest.toml"), overwrite: true);
         }
     }
 
@@ -453,6 +612,7 @@ internal static class Bootstrapper
         Commands:
           install [--catalog <runtime-catalog.toml>] [--root <path>]
           catalog --catalog <runtime-catalog.toml> [--root <path>]
+          apply-runtime --staging <path> --wait-pid <pid> --restart <launcher.exe> [--root <path>]
           webview2-status
 
         Catalog format:

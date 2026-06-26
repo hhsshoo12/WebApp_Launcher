@@ -22,18 +22,21 @@ public sealed class RuntimeInspector
     public async Task<IReadOnlyList<RuntimeStatus>> InspectAsync(
         CancellationToken cancellationToken = default)
     {
+        var versions = ReadManagedVersions();
         var specs = new[]
         {
-            new RuntimeSpec("python313", "Python 3.13", "3.13.14", paths.GetPythonExecutable("python313"), "--version"),
-            new RuntimeSpec("python314", "Python 3.14", "3.14.6", paths.GetPythonExecutable("python314"), "--version"),
-            new RuntimeSpec("nodejs-lts-22", "Node.js LTS 22", "22.23.0", paths.GetNodeExecutable("nodejs-lts-22"), "--version"),
-            new RuntimeSpec("nodejs-lts-24", "Node.js LTS 24", "24.17.0", paths.GetNodeExecutable("nodejs-lts-24"), "--version"),
-            new RuntimeSpec("git", "Git", "2.54.0", paths.GitExecutable, "--version"),
-            new RuntimeSpec("uv", "uv", "0.11.23", paths.UvExecutable, "--version"),
-            new RuntimeSpec("pnpm", "pnpm", "11.8.0", ResolvePnpmExecutable(), "--version")
+            new RuntimeSpec("python313", "Python 3.13", VersionOf("python313"), paths.GetPythonExecutable("python313"), "--version"),
+            new RuntimeSpec("python314", "Python 3.14", VersionOf("python314"), paths.GetPythonExecutable("python314"), "--version"),
+            new RuntimeSpec("nodejs-lts-22", "Node.js LTS 22", VersionOf("nodejs-lts-22"), paths.GetNodeExecutable("nodejs-lts-22"), "--version"),
+            new RuntimeSpec("nodejs-lts-24", "Node.js LTS 24", VersionOf("nodejs-lts-24"), paths.GetNodeExecutable("nodejs-lts-24"), "--version"),
+            new RuntimeSpec("git", "Git", VersionOf("git"), paths.GitExecutable, "--version"),
+            new RuntimeSpec("uv", "uv", VersionOf("uv"), paths.UvExecutable, "--version"),
+            new RuntimeSpec("pnpm", "pnpm", VersionOf("pnpm"), ResolvePnpmExecutable(), "--version")
         };
 
         return await Task.WhenAll(specs.Select(spec => InspectAsync(spec, cancellationToken)));
+
+        string VersionOf(string id) => versions.TryGetValue(id, out var value) ? value : "unknown";
     }
 
     private async Task<RuntimeStatus> InspectAsync(
@@ -68,7 +71,9 @@ public sealed class RuntimeInspector
             var installed = ExtractVersion(output);
             var status = result.ExitCode != 0 || installed is null
                 ? "error"
-                : CompareVersions(installed, spec.ExpectedVersion);
+                : spec.ExpectedVersion == "unknown"
+                    ? "unmanaged"
+                    : CompareVersions(installed, spec.ExpectedVersion);
             return new RuntimeStatus(
                 spec.Id,
                 spec.Name,
@@ -93,6 +98,32 @@ public sealed class RuntimeInspector
     {
         var exe = Path.Combine(paths.Tools, "pnpm", "pnpm.exe");
         return File.Exists(exe) ? exe : paths.PnpmExecutable;
+    }
+
+    private IReadOnlyDictionary<string, string> ReadManagedVersions()
+    {
+        var path = Path.Combine(paths.Root, "runtime-manifest.toml");
+        if (!File.Exists(path))
+        {
+            return new Dictionary<string, string>();
+        }
+
+        try
+        {
+            var document = SimpleToml.ParseFile(path);
+            var ids = new[]
+            {
+                "python313", "python314", "nodejs-lts-22", "nodejs-lts-24", "git", "uv", "pnpm"
+            };
+            return ids
+                .Select(id => (Id: id, Version: document.GetOptionalString("versions", id)))
+                .Where(item => item.Version is not null)
+                .ToDictionary(item => item.Id, item => item.Version!, StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return new Dictionary<string, string>();
+        }
     }
 
     private static string? ExtractVersion(string output)

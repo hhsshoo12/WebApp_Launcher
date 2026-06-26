@@ -8,9 +8,10 @@ public static class TomlManifestStore
     public static WapkManifest LoadWapk(string path)
     {
         var document = SimpleToml.ParseFile(path);
+        var format = document.GetInt("wapk", "format");
         var manifest = new WapkManifest(
-            document.GetInt("wapk", "format"),
-            ReadPackage(document),
+            format,
+            ReadPackage(document, versionRequired: format == 1),
             ReadSource(document),
             ReadRuntime(document),
             ReadWapkEntry(document),
@@ -32,7 +33,8 @@ public static class TomlManifestStore
             ReadInstalledEntry(document),
             ReadNetwork(document),
             ReadStorage(document),
-            ReadWindow(document));
+            ReadWindow(document),
+            ReadOptionalSource(document));
         ManifestValidator.Validate(manifest);
         return manifest;
     }
@@ -53,6 +55,18 @@ public static class TomlManifestStore
         WriteValue(builder, "version", manifest.Package.Version);
         builder.AppendLine();
 
+        if (manifest.Source is not null)
+        {
+            WriteSection(builder, "source");
+            WriteValue(builder, "provider", manifest.Source.Provider);
+            WriteValue(builder, "owner", manifest.Source.Owner);
+            WriteValue(builder, "repo", manifest.Source.Repo);
+            WriteValue(builder, "branch", manifest.Source.Branch);
+            WriteValue(builder, "commit", manifest.Source.Commit);
+            WriteValue(builder, "app_dir", manifest.Source.AppDir);
+            builder.AppendLine();
+        }
+
         WriteSection(builder, "paths");
         WriteValue(builder, "source", manifest.Paths.Source);
         WriteValue(builder, "data", manifest.Paths.Data);
@@ -69,6 +83,7 @@ public static class TomlManifestStore
         WriteValue(builder, "mode", manifest.Entry.Mode ?? "static");
         WriteValue(builder, "html", manifest.Entry.Html);
         WriteValue(builder, "server", manifest.Entry.Server ?? string.Empty);
+        WriteValue(builder, "icon", manifest.Entry.Icon ?? string.Empty);
         builder.AppendLine();
 
         WriteSection(builder, "network");
@@ -88,17 +103,25 @@ public static class TomlManifestStore
         WriteValue(builder, "height", manifest.Window.Height);
         WriteValue(builder, "resizable", manifest.Window.Resizable);
         WriteValue(builder, "devtools", manifest.Window.Devtools);
+        WriteValue(builder, "transparent", manifest.Window.Transparent);
+        WriteValue(builder, "borderless", manifest.Window.Borderless);
+        WriteValue(builder, "fullscreen", manifest.Window.Fullscreen);
+        WriteValue(builder, "always_on_top", manifest.Window.AlwaysOnTop);
+        WriteValue(builder, "start_maximized", manifest.Window.StartMaximized);
+        WriteValue(builder, "instance_mode", manifest.Window.InstanceMode);
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, builder.ToString(), Encoding.UTF8);
     }
 
-    private static PackageInfo ReadPackage(SimpleToml document)
+    private static PackageInfo ReadPackage(SimpleToml document, bool versionRequired = true)
     {
         return new PackageInfo(
             document.GetString("package", "id"),
             document.GetString("package", "name"),
-            document.GetString("package", "version"));
+            versionRequired
+                ? document.GetString("package", "version")
+                : document.GetOptionalString("package", "version") ?? string.Empty);
     }
 
     private static SourceInfo ReadSource(SimpleToml document)
@@ -110,6 +133,24 @@ public static class TomlManifestStore
             document.GetString("source", "branch"),
             document.GetString("source", "commit"),
             document.GetString("source", "app_dir"));
+    }
+
+    private static SourceInfo? ReadOptionalSource(SimpleToml document)
+    {
+        var owner = document.GetOptionalString("source", "owner");
+        var repo = document.GetOptionalString("source", "repo");
+        if (owner is null || repo is null)
+        {
+            return null;
+        }
+
+        return new SourceInfo(
+            document.GetOptionalString("source", "provider") ?? "github",
+            owner,
+            repo,
+            document.GetOptionalString("source", "branch") ?? "*",
+            document.GetOptionalString("source", "commit") ?? "*",
+            document.GetOptionalString("source", "app_dir") ?? ".");
     }
 
     private static RuntimeInfo ReadRuntime(SimpleToml document)
@@ -134,7 +175,7 @@ public static class TomlManifestStore
             document.GetString("entry", "html"),
             null,
             null,
-            null,
+            document.GetOptionalString("entry", "icon"),
             document.GetString("entry", "mode"),
             document.GetOptionalString("entry", "server"));
     }
@@ -170,7 +211,13 @@ public static class TomlManifestStore
             document.GetInt("window", "width"),
             document.GetInt("window", "height"),
             document.GetBool("window", "resizable"),
-            document.GetBool("window", "devtools"));
+            document.GetBool("window", "devtools"),
+            document.GetOptionalBool("window", "transparent"),
+            document.GetOptionalBool("window", "borderless"),
+            document.GetOptionalBool("window", "fullscreen"),
+            document.GetOptionalBool("window", "always_on_top"),
+            document.GetOptionalBool("window", "start_maximized"),
+            document.GetOptionalString("window", "instance_mode") ?? "new_backend");
     }
 
     private static void WriteSection(StringBuilder builder, string section)
@@ -283,6 +330,20 @@ internal sealed class SimpleToml
     public bool GetBool(string section, string key)
     {
         var value = GetString(section, key);
+        return bool.TryParse(value, out var flag)
+            ? flag
+            : throw new InvalidDataException($"TOML field [{section}].{key} must be a boolean.");
+    }
+
+    public bool GetOptionalBool(string section, string key, bool defaultValue = false)
+    {
+        if (!sections.TryGetValue(section, out var table) ||
+            !table.TryGetValue(key, out var value) ||
+            string.IsNullOrWhiteSpace(value))
+        {
+            return defaultValue;
+        }
+
         return bool.TryParse(value, out var flag)
             ? flag
             : throw new InvalidDataException($"TOML field [{section}].{key} must be a boolean.");

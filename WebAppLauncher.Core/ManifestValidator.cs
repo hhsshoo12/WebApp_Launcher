@@ -18,12 +18,12 @@ public static class ManifestValidator
 
     public static void Validate(WapkManifest manifest)
     {
-        if (manifest.Format != 1)
+        if (manifest.Format is not (1 or 2))
         {
-            throw new InvalidDataException("Unsupported .wapk format. Expected format = 1.");
+            throw new InvalidDataException("Unsupported .wapk format. Expected format = 1 or 2.");
         }
 
-        ValidatePackage(manifest.Package);
+        ValidatePackage(manifest.Package, requireVersion: manifest.Format == 1);
         if (!string.Equals(manifest.Source.Provider, "github", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Only GitHub sources are supported in v1.");
@@ -44,12 +44,12 @@ public static class ManifestValidator
 
     public static void Validate(WebAppManifest manifest)
     {
-        if (manifest.Format != 1)
+        if (manifest.Format is not (1 or 2))
         {
-            throw new InvalidDataException("Unsupported .webapp format. Expected format = 1.");
+            throw new InvalidDataException("Unsupported .webapp format. Expected format = 1 or 2.");
         }
 
-        ValidatePackage(manifest.Package);
+        ValidatePackage(manifest.Package, requireVersion: true);
         Require(manifest.SourceCommit, "webapp.source_commit");
         ValidateRuntime(manifest.Runtime, allowLegacyPython312: true);
         EnsureRelativePath(manifest.Paths.Source, "paths.source");
@@ -86,13 +86,20 @@ public static class ManifestValidator
         }
 
         ValidateWindow(manifest.Window);
+        if (manifest.Format == 2 && manifest.Source is null)
+        {
+            throw new InvalidDataException("format 2 .webapp metadata requires a source section.");
+        }
     }
 
-    private static void ValidatePackage(PackageInfo package)
+    private static void ValidatePackage(PackageInfo package, bool requireVersion)
     {
         Require(package.Id, "package.id");
         Require(package.Name, "package.name");
-        Require(package.Version, "package.version");
+        if (requireVersion)
+        {
+            Require(package.Version, "package.version");
+        }
         if (!package.Id.Contains('@', StringComparison.Ordinal))
         {
             throw new InvalidDataException("package.id must use owner@repo form.");
@@ -120,6 +127,12 @@ public static class ManifestValidator
         if (window.Width < 320 || window.Height < 240)
         {
             throw new InvalidDataException("window size is too small.");
+        }
+
+        if (window.InstanceMode is not ("focus_existing" or "share_backend" or "new_backend"))
+        {
+            throw new InvalidDataException(
+                "window.instance_mode must be focus_existing, share_backend, or new_backend.");
         }
     }
 

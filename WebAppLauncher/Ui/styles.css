@@ -148,7 +148,7 @@ h2 { font-size: 20px; }
 
 .list-head, .app-row {
   display: grid;
-  grid-template-columns: minmax(260px, 1.7fr) minmax(150px, .9fr) 100px 134px;
+  grid-template-columns: minmax(260px, 1.7fr) minmax(150px, .9fr) 100px 176px;
   align-items: center;
   column-gap: 16px;
 }
@@ -162,6 +162,10 @@ h2 { font-size: 20px; }
 .app-icon img { width: 100%; height: 100%; object-fit: cover; }
 .app-copy { min-width: 0; }
 .app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 680; }
+.update-badge { display: inline-block; margin-left: 7px; padding: 2px 5px; vertical-align: 1px; color: #667173; background: #edf0f0; border-radius: 3px; font-size: 9px; font-weight: 700; }
+.update-badge.available, .update-badge.pending { color: #87570d; background: #fff1d7; }
+.update-badge.current { color: #17645f; background: #e5f4f2; }
+.update-badge.error { color: #9d342d; background: #fde8e6; }
 .app-package { margin-top: 5px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font: 11px "Cascadia Mono", Consolas, monospace; }
 .runtime { color: #4d585a; font-size: 12px; }
 .runtime b { display: block; margin-bottom: 4px; color: var(--ink); font-size: 12px; font-weight: 650; }
@@ -225,6 +229,16 @@ h2 { font-size: 20px; }
 .settings-kicker { margin: 0; color: var(--accent-dark); font: 650 10px "Cascadia Mono", Consolas, monospace; }
 .settings-description, .settings-note { color: var(--muted); line-height: 1.6; }
 .settings-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.settings-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+.update-result-action { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.compact-button { min-height: 30px; padding: 0 9px; font-size: 10px; }
+.compact-switch { margin-top: 22px; }
+.update-banner { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 22px; padding: 16px; background: #f5f8f7; border: 1px solid var(--line); border-radius: 6px; }
+.update-banner strong, .update-banner small { display: block; }
+.update-banner small { margin-top: 5px; color: var(--muted); }
+.download-progress { position: relative; height: 24px; margin-top: 10px; overflow: hidden; background: #e1e7e6; border-radius: 4px; }
+.download-progress i { display: block; width: 0; height: 100%; background: #9ed4cf; transition: width 160ms ease; }
+.download-progress span { position: absolute; inset: 0; display: grid; place-items: center; color: #254542; font: 10px "Cascadia Mono", Consolas, monospace; }
 .port-meter { padding: 22px; background: #f5f8f7; border: 1px solid var(--line); border-radius: 6px; }
 .port-meter-header { display: flex; align-items: flex-start; justify-content: space-between; }
 .port-number { display: flex; align-items: baseline; gap: 8px; }

@@ -2,7 +2,11 @@ using System.Text.Json;
 
 namespace WebAppLauncher.Core;
 
-public sealed record LauncherSettings(bool DeveloperMode = false);
+public sealed record LauncherSettings(
+    bool DeveloperMode = false,
+    bool AutomaticAppUpdates = true,
+    DateTimeOffset? LastAppUpdateCheck = null,
+    DateTimeOffset? LastRuntimeUpdateCheck = null);
 
 public sealed class LauncherSettingsStore
 {

@@ -36,6 +36,7 @@ Copy-Item -Path (Join-Path $publishRoot "WebAppLauncher\*") -Destination $payloa
 Copy-Item -LiteralPath (Join-Path $publishRoot "WebAppLauncher.Cli\WebAppLauncher.Cli.exe") -Destination $payload -Force
 Copy-Item -LiteralPath (Join-Path $publishRoot "WebAppLauncher.Bootstrapper\WebAppLauncher.Bootstrapper.exe") -Destination $payload -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "runtime-catalog.toml") -Destination $payload -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "runtime-manifest.toml") -Destination $payload -Force
 
 Compress-Archive -Path (Join-Path $payload "*") -DestinationPath $portableZip -CompressionLevel Optimal
 

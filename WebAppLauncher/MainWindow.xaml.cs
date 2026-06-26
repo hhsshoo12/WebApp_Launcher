@@ -17,17 +17,30 @@ public partial class MainWindow : Window
     private readonly AppRepository repository;
     private readonly AppInstaller installer;
     private readonly AppLauncher launcher;
+    private readonly AppUpdateManager updateManager;
+    private readonly RuntimeUpdateManager runtimeUpdateManager;
     private readonly LauncherSettingsStore settingsStore;
     private LauncherSettings settings;
     private readonly List<ActiveSession> activeSessions = [];
+    private readonly Dictionary<string, AppUpdateStatus> updateStatuses =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, PreparedAppUpdate> preparedUpdates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private RuntimeBundleInfo? runtimeBundle;
 
     public MainWindow()
     {
         repository = new AppRepository(paths);
         installer = new AppInstaller(paths);
         launcher = new AppLauncher(paths);
+        updateManager = new AppUpdateManager(paths);
+        runtimeUpdateManager = new RuntimeUpdateManager(paths);
         settingsStore = new LauncherSettingsStore(paths);
         settings = settingsStore.Load();
+        foreach (var prepared in updateManager.ListPrepared())
+        {
+            preparedUpdates[prepared.PackageId] = prepared;
+        }
         InitializeComponent();
         paths.EnsureRootLayout();
         Loaded += LoadedAsync;
@@ -99,8 +112,10 @@ public partial class MainWindow : Window
             switch (command.Type)
             {
                 case "ready":
-                SendState();
-                break;
+                    ApplyPreparedUpdatesForIdleApps();
+                    SendState();
+                    _ = RunScheduledChecksAsync();
+                    break;
                 case "refresh":
                     SendState("앱 목록을 새로 고쳤습니다.");
                     break;
@@ -139,6 +154,33 @@ public partial class MainWindow : Window
                     break;
                 case "checkRuntimeUpdates":
                     await CheckRuntimeUpdatesAsync();
+                    break;
+                case "checkRuntimeRelease":
+                    await CheckRuntimeReleaseAsync();
+                    break;
+                case "runtimeReleaseState":
+                    Send(new { type = "runtimeRelease", status = "complete", bundle = runtimeBundle });
+                    break;
+                case "downloadRuntimeUpdate":
+                    await DownloadRuntimeUpdateAsync();
+                    break;
+                case "applyRuntimeUpdate":
+                    ApplyRuntimeUpdate();
+                    break;
+                case "checkAppUpdates":
+                    await CheckAppUpdatesAsync(prepareAvailable: false);
+                    break;
+                case "appUpdateState":
+                    SendAppUpdateState();
+                    break;
+                case "updateApp":
+                    await UpdateAppAsync(command);
+                    break;
+                case "updateAllApps":
+                    await UpdateAllAppsAsync();
+                    break;
+                case "setAutomaticAppUpdates":
+                    SetAutomaticAppUpdates(command);
                     break;
                 case "licenses":
                     SendLicenses();
@@ -183,29 +225,42 @@ public partial class MainWindow : Window
     private void Run(LauncherCommand command)
     {
         var app = ResolveApp(command);
-        var result = launcher.Launch(app);
-        var window = new AppWindow(result, settings.DeveloperMode);
-        var session = new ActiveSession(result, window);
-        activeSessions.Add(session);
+        var matchingSessions = activeSessions
+            .Where(session => IsSameApp(session.Launch.App, app))
+            .ToArray();
 
-        if (result.Process is not null)
+        if (app.Manifest.Window.InstanceMode == "focus_existing" &&
+            matchingSessions.FirstOrDefault() is { } existingSession)
         {
-            result.Process.EnableRaisingEvents = true;
-            result.Process.Exited += (_, _) =>
-                Dispatcher.BeginInvoke(() =>
-                {
-                    activeSessions.Remove(session);
-                    SendProcessManagerState();
-                });
+            BringToFront(existingSession);
+            Send(new
+            {
+                type = "toast",
+                tone = "success",
+                message = $"{app.Manifest.Package.Name} 창을 앞으로 가져왔습니다."
+            });
+            return;
         }
 
-        window.Closed += (_, _) =>
+        if (app.Manifest.Window.InstanceMode == "share_backend" &&
+            matchingSessions.FirstOrDefault(session =>
+                session.Launch.Process is null || !session.Launch.Process.HasExited) is { } sharedSession)
         {
-            activeSessions.Remove(session);
-            SendProcessManagerState();
-        };
-        window.Show();
-        SendProcessManagerState();
+            OpenAppWindow(sharedSession.Launch, ownsBackend: false);
+            Send(new
+            {
+                type = "toast",
+                tone = "success",
+                message = $"{app.Manifest.Package.Name}의 새 창을 열었습니다."
+            });
+            return;
+        }
+
+        var result = launcher.Launch(app);
+        AttachBackendExitHandler(result);
+        OpenAppWindow(
+            result,
+            ownsBackend: app.Manifest.Window.InstanceMode != "share_backend");
         Send(new
         {
             type = "toast",
@@ -214,10 +269,92 @@ public partial class MainWindow : Window
         });
     }
 
+    private void OpenAppWindow(LaunchResult result, bool ownsBackend)
+    {
+        var window = new AppWindow(result, settings.DeveloperMode, ownsBackend);
+        var session = new ActiveSession(result, window);
+        activeSessions.Add(session);
+
+        window.Closed += (_, _) =>
+        {
+            if (result.App.Manifest.Window.InstanceMode == "share_backend" &&
+                !activeSessions.Any(item =>
+                    ReferenceEquals(item.Launch, result) &&
+                    item.Window.IsVisible))
+            {
+                result.StopBackend();
+            }
+
+            SendProcessManagerState();
+        };
+        window.CleanupCompleted += (_, _) =>
+        {
+            activeSessions.Remove(session);
+            try
+            {
+                ApplyPreparedUpdateIfIdle(result.App.Manifest.Package.Id);
+            }
+            catch (Exception ex)
+            {
+                SendError(ex.Message);
+            }
+
+            SendProcessManagerState();
+        };
+        window.Show();
+        SendProcessManagerState();
+    }
+
+    private void AttachBackendExitHandler(LaunchResult result)
+    {
+        if (result.Process is not { } process)
+        {
+            return;
+        }
+
+        process.EnableRaisingEvents = true;
+        process.Exited += (_, _) =>
+            Dispatcher.BeginInvoke(() =>
+            {
+                foreach (var session in activeSessions
+                             .Where(item => ReferenceEquals(item.Launch, result))
+                             .ToArray())
+                {
+                    if (session.Window.IsVisible)
+                    {
+                        session.Window.Close();
+                    }
+                }
+
+                SendProcessManagerState();
+            });
+    }
+
+    private static void BringToFront(ActiveSession session)
+    {
+        var window = session.Window;
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState =
+                session.Launch.App.Manifest.Window.Fullscreen ||
+                session.Launch.App.Manifest.Window.StartMaximized
+                    ? WindowState.Maximized
+                    : WindowState.Normal;
+        }
+
+        var wasTopmost = window.Topmost;
+        window.Show();
+        window.Activate();
+        window.Topmost = true;
+        window.Topmost = wasTopmost;
+    }
+
     private void Remove(LauncherCommand command)
     {
         var app = ResolveApp(command);
         installer.Remove(app.Manifest.Package.Id, app.Manifest.Package.Version);
+        preparedUpdates.Remove(app.Manifest.Package.Id);
+        updateStatuses.Remove(app.Manifest.Package.Id);
         SendState($"{app.Manifest.Package.Name} {app.Manifest.Package.Version}을 삭제했습니다.");
     }
 
@@ -259,7 +396,8 @@ public partial class MainWindow : Window
                 origin = app.Manifest.Entry.Mode == "server" ? "실행 시 할당" : "로컬 파일",
                 installedAt = app.Manifest.InstalledAt,
                 installDirectory = app.InstallDirectory,
-                icon = ReadIconDataUri(app)
+                icon = ReadIconDataUri(app),
+                update = UpdateStateFor(app)
             })
             .ToArray();
 
@@ -274,16 +412,30 @@ public partial class MainWindow : Window
 
     private void KillProcess(LauncherCommand command)
     {
-        var app = ResolveApp(command);
+        if (command.ProcessId is null)
+        {
+            throw new InvalidOperationException("프로세스 식별 정보가 없습니다.");
+        }
+
         var session = activeSessions.FirstOrDefault(s =>
-            s.Launch.App.Manifest.Package.Id.Equals(app.Manifest.Package.Id, StringComparison.OrdinalIgnoreCase) &&
-            s.Launch.App.Manifest.Package.Version.Equals(app.Manifest.Package.Version, StringComparison.OrdinalIgnoreCase));
+            s.Launch.Process?.Id == command.ProcessId &&
+            (string.IsNullOrWhiteSpace(command.PackageId) ||
+             s.Launch.App.Manifest.Package.Id.Equals(command.PackageId, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrWhiteSpace(command.Version) ||
+             s.Launch.App.Manifest.Package.Version.Equals(command.Version, StringComparison.OrdinalIgnoreCase)));
         if (session is null)
         {
             throw new InvalidOperationException("실행 중인 프로세스를 찾을 수 없습니다.");
         }
 
-        session.Window.Close();
+        foreach (var matchingSession in activeSessions
+                     .Where(item => ReferenceEquals(item.Launch, session.Launch))
+                     .ToArray())
+        {
+            matchingSession.Window.Close();
+        }
+
+        session.Launch.StopBackend();
         Send(new { type = "idle" });
     }
 
@@ -291,7 +443,8 @@ public partial class MainWindow : Window
     {
         var occupiedPorts = PortManager.GetOccupiedPorts();
         var processes = activeSessions
-            .Where(s => s.Launch.Process is not null)
+            .Where(s => s.Launch.Process is { HasExited: false })
+            .DistinctBy(s => s.Launch.Process!.Id)
             .Select(s => new
             {
                 packageId = s.Launch.App.Manifest.Package.Id,
@@ -334,7 +487,10 @@ public partial class MainWindow : Window
         Send(new
         {
             type = "settings",
-            developerMode = settings.DeveloperMode
+            developerMode = settings.DeveloperMode,
+            automaticAppUpdates = settings.AutomaticAppUpdates,
+            lastAppUpdateCheck = settings.LastAppUpdateCheck,
+            lastRuntimeUpdateCheck = settings.LastRuntimeUpdateCheck
         });
     }
 
@@ -363,6 +519,275 @@ public partial class MainWindow : Window
         Send(new { type = "runtimeCheck", status = "checking" });
         var items = await new RuntimeInspector(paths).InspectAsync();
         Send(new { type = "runtimeCheck", status = "complete", items });
+    }
+
+    private async Task RunScheduledChecksAsync()
+    {
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (settings.AutomaticAppUpdates &&
+                now - settings.LastAppUpdateCheck.GetValueOrDefault(DateTimeOffset.MinValue) >= TimeSpan.FromDays(1))
+            {
+                await CheckAppUpdatesAsync(prepareAvailable: true, quiet: true);
+            }
+
+            if (now - settings.LastRuntimeUpdateCheck.GetValueOrDefault(DateTimeOffset.MinValue) >= TimeSpan.FromDays(1))
+            {
+                await CheckRuntimeReleaseAsync(quiet: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+        }
+    }
+
+    private async Task CheckAppUpdatesAsync(bool prepareAvailable, bool quiet = false)
+    {
+        if (!quiet)
+        {
+            Send(new { type = "appUpdates", status = "checking" });
+        }
+
+        foreach (var app in repository.ListInstalled())
+        {
+            var status = await updateManager.CheckAsync(app);
+            updateStatuses[app.Manifest.Package.Id] = status;
+            if (prepareAvailable && status.Status == "available")
+            {
+                try
+                {
+                    var prepared = await updateManager.PrepareAsync(app);
+                    if (prepared is not null)
+                    {
+                        preparedUpdates[prepared.PackageId] = prepared;
+                        updateStatuses[prepared.PackageId] = status with { Status = "pending" };
+                        ApplyPreparedUpdateIfIdle(prepared.PackageId);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    updateStatuses[app.Manifest.Package.Id] =
+                        status with { Status = "error", Message = ex.Message };
+                }
+            }
+        }
+
+        settings = settings with { LastAppUpdateCheck = DateTimeOffset.UtcNow };
+        settingsStore.Save(settings);
+        SendState();
+        SendAppUpdateState();
+    }
+
+    private async Task UpdateAppAsync(LauncherCommand command)
+    {
+        var app = ResolveApp(command);
+        Send(new { type = "busy", message = $"{app.Manifest.Package.Name} 업데이트를 준비하는 중입니다." });
+        var prepared = await updateManager.PrepareAsync(app);
+        if (prepared is null)
+        {
+            updateStatuses[app.Manifest.Package.Id] = await updateManager.CheckAsync(app);
+            SendState($"{app.Manifest.Package.Name}은 이미 최신 버전입니다.");
+            SendAppUpdateState();
+            return;
+        }
+
+        preparedUpdates[prepared.PackageId] = prepared;
+        updateStatuses[prepared.PackageId] = new AppUpdateStatus(
+            prepared.PackageId,
+            app.Manifest.Package.Name,
+            prepared.OldVersion,
+            app.Manifest.SourceCommit,
+            prepared.NewVersion,
+            prepared.Commit,
+            "pending");
+        var applied = ApplyPreparedUpdateIfIdle(prepared.PackageId);
+        SendState(applied
+            ? $"{app.Manifest.Package.Name}을 {prepared.NewVersion} 버전으로 업데이트했습니다."
+            : $"{app.Manifest.Package.Name} 업데이트를 준비했습니다. 앱 종료 후 적용됩니다.");
+        SendAppUpdateState();
+    }
+
+    private async Task UpdateAllAppsAsync()
+    {
+        foreach (var app in repository.ListInstalled())
+        {
+            if (app.Manifest.Format != 2 || app.Manifest.Source?.Commit != "*")
+            {
+                continue;
+            }
+
+            try
+            {
+                var prepared = await updateManager.PrepareAsync(app);
+                if (prepared is not null)
+                {
+                    preparedUpdates[prepared.PackageId] = prepared;
+                    ApplyPreparedUpdateIfIdle(prepared.PackageId);
+                }
+            }
+            catch (Exception ex)
+            {
+                updateStatuses[app.Manifest.Package.Id] = new AppUpdateStatus(
+                    app.Manifest.Package.Id,
+                    app.Manifest.Package.Name,
+                    app.Manifest.Package.Version,
+                    app.Manifest.SourceCommit,
+                    null,
+                    null,
+                    "error",
+                    ex.Message);
+            }
+        }
+
+        await CheckAppUpdatesAsync(prepareAvailable: false);
+    }
+
+    private void SetAutomaticAppUpdates(LauncherCommand command)
+    {
+        if (command.Enabled is null)
+        {
+            throw new InvalidOperationException("자동 업데이트 설정값이 없습니다.");
+        }
+
+        settings = settings with { AutomaticAppUpdates = command.Enabled.Value };
+        settingsStore.Save(settings);
+        SendSettings();
+    }
+
+    private void SendAppUpdateState()
+    {
+        Send(new
+        {
+            type = "appUpdates",
+            status = "complete",
+            lastChecked = settings.LastAppUpdateCheck,
+            items = updateStatuses.Values.OrderBy(item => item.Name).ToArray()
+        });
+    }
+
+    private bool ApplyPreparedUpdateIfIdle(string packageId)
+    {
+        if (!preparedUpdates.TryGetValue(packageId, out var prepared) ||
+            activeSessions.Any(session =>
+                session.Launch.App.Manifest.Package.Id.Equals(
+                    packageId,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var oldApp = repository.GetInstalled(packageId, prepared.OldVersion);
+        var installed = updateManager.Apply(oldApp, prepared);
+        preparedUpdates.Remove(packageId);
+        updateStatuses[packageId] = new AppUpdateStatus(
+            packageId,
+            installed.Manifest.Package.Name,
+            installed.Manifest.Package.Version,
+            installed.Manifest.SourceCommit,
+            installed.Manifest.Package.Version,
+            installed.Manifest.SourceCommit,
+            "current");
+        SendState();
+        return true;
+    }
+
+    private void ApplyPreparedUpdatesForIdleApps()
+    {
+        foreach (var packageId in preparedUpdates.Keys.ToArray())
+        {
+            try
+            {
+                ApplyPreparedUpdateIfIdle(packageId);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
+    }
+
+    private object? UpdateStateFor(InstalledApp app)
+    {
+        if (preparedUpdates.TryGetValue(app.Manifest.Package.Id, out var prepared))
+        {
+            return new
+            {
+                status = "pending",
+                latestVersion = prepared.NewVersion,
+                latestCommit = prepared.Commit
+            };
+        }
+
+        return updateStatuses.TryGetValue(app.Manifest.Package.Id, out var status)
+            ? new
+            {
+                status = status.Status,
+                latestVersion = status.LatestVersion,
+                latestCommit = status.LatestCommit,
+                message = status.Message
+            }
+            : null;
+    }
+
+    private async Task CheckRuntimeReleaseAsync(bool quiet = false)
+    {
+        if (!quiet)
+        {
+            Send(new { type = "runtimeRelease", status = "checking" });
+        }
+
+        runtimeBundle = await runtimeUpdateManager.CheckAsync();
+        settings = settings with { LastRuntimeUpdateCheck = DateTimeOffset.UtcNow };
+        settingsStore.Save(settings);
+        Send(new { type = "runtimeRelease", status = "complete", bundle = runtimeBundle });
+    }
+
+    private async Task DownloadRuntimeUpdateAsync()
+    {
+        runtimeBundle ??= await runtimeUpdateManager.CheckAsync();
+        if (runtimeBundle.Status == "error")
+        {
+            throw new InvalidOperationException(runtimeBundle.Message);
+        }
+
+        var progress = new Progress<double>(value =>
+            Send(new { type = "runtimeDownload", percent = Math.Round(value, 1) }));
+        runtimeBundle = await runtimeUpdateManager.DownloadAsync(runtimeBundle, progress);
+        Send(new { type = "runtimeRelease", status = "complete", bundle = runtimeBundle });
+    }
+
+    private void ApplyRuntimeUpdate()
+    {
+        if (runtimeBundle?.Status != "downloaded" ||
+            string.IsNullOrWhiteSpace(runtimeBundle.StagingDirectory))
+        {
+            throw new InvalidOperationException("다운로드된 런타임 업데이트가 없습니다.");
+        }
+
+        foreach (var session in activeSessions.ToArray())
+        {
+            session.Window.Close();
+        }
+
+        var bootstrapper = Path.Combine(AppContext.BaseDirectory, "WebAppLauncher.Bootstrapper.exe");
+        if (!File.Exists(bootstrapper))
+        {
+            throw new FileNotFoundException("Bootstrapper를 찾을 수 없습니다.", bootstrapper);
+        }
+
+        var executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("런처 실행 파일 경로를 확인할 수 없습니다.");
+        Process.Start(new ProcessStartInfo(
+            bootstrapper,
+            $"apply-runtime --staging {Quote(runtimeBundle.StagingDirectory)} " +
+            $"--wait-pid {Environment.ProcessId} --restart {Quote(executable)} --root {Quote(paths.Root)}")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        Application.Current.Shutdown();
     }
 
     private void SendLicenses()
@@ -396,6 +821,21 @@ public partial class MainWindow : Window
         var values = new[] { runtime.Python, runtime.Node }
             .Where(value => !value.Equals("none", StringComparison.OrdinalIgnoreCase));
         return string.Join(" + ", values);
+    }
+
+    private static bool IsSameApp(InstalledApp left, InstalledApp right)
+    {
+        return left.Manifest.Package.Id.Equals(
+                   right.Manifest.Package.Id,
+                   StringComparison.OrdinalIgnoreCase) &&
+               left.Manifest.Package.Version.Equals(
+                   right.Manifest.Package.Version,
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Quote(string value)
+    {
+        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     }
 
     private static string? ReadIconDataUri(InstalledApp app)
@@ -441,7 +881,8 @@ public partial class MainWindow : Window
         string Type,
         string? PackageId = null,
         string? Version = null,
-        bool? Enabled = null);
+        bool? Enabled = null,
+        int? ProcessId = null);
 
     private sealed record ActiveSession(LaunchResult Launch, AppWindow Window);
 }

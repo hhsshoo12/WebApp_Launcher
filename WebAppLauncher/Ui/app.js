@@ -10,7 +10,9 @@ const state = {
   licenses: { project: "", thirdParty: "" },
   activeLicense: "project",
   processes: [],
-  processPorts: { occupied: 0, total: 1000, percent: 0, values: [] }
+  processPorts: { occupied: 0, total: 1000, percent: 0, values: [] },
+  appUpdates: [],
+  runtimeBundle: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -41,6 +43,10 @@ function post(message) {
 
 function appKey(app) {
   return `${encodeURIComponent(app.packageId)}::${encodeURIComponent(app.version)}`;
+}
+
+function processKey(proc) {
+  return `${appKey(proc)}::${encodeURIComponent(proc.processId)}`;
 }
 
 function findApp(key) {
@@ -90,12 +96,19 @@ function renderAppLibrary() {
     const iconMarkup = app.icon?.startsWith("data:image/")
       ? `<img src="${escapeHtml(app.icon)}" alt="">`
       : escapeHtml(appInitial(app.name));
+    const updateStatus = app.update?.status;
+    const updateBadge = updateStatus
+      ? `<span class="update-badge ${escapeHtml(updateStatus)}">${escapeHtml(updateLabel(updateStatus))}</span>`
+      : "";
+    const updateButton = updateStatus === "available"
+      ? `<button class="icon-button" type="button" title="앱 업데이트" aria-label="앱 업데이트" data-row-action="update">${icon("refresh")}</button>`
+      : "";
     return `
       <article class="app-row" data-key="${key}">
         <div class="app-identity">
           <div class="app-icon">${iconMarkup}</div>
           <div class="app-copy">
-            <div class="app-name">${escapeHtml(app.name)} <span class="app-version">${escapeHtml(app.version)}</span></div>
+            <div class="app-name">${escapeHtml(app.name)} <span class="app-version">${escapeHtml(app.version)}</span>${updateBadge}</div>
             <div class="app-package">${escapeHtml(app.packageId)}</div>
           </div>
         </div>
@@ -103,7 +116,8 @@ function renderAppLibrary() {
         <div class="port"><span>${escapeHtml(app.port)}</span></div>
         <div class="row-actions">
           <button class="secondary-button run-button" type="button" data-row-action="run">${icon("play")}실행</button>
-          <button class="icon-button" type="button" title="데이터 폴 열기" aria-label="데이터 폴 열기" data-row-action="open-data">${icon("folder")}</button>
+          ${updateButton}
+          <button class="icon-button" type="button" title="데이터 폴더 열기" aria-label="데이터 폴더 열기" data-row-action="open-data">${icon("folder")}</button>
           <button class="icon-button delete" type="button" title="앱 삭제" aria-label="앱 삭제" data-row-action="remove">${icon("trash")}</button>
         </div>
       </article>`;
@@ -140,7 +154,7 @@ function renderProcessManager() {
   const processes = state.processes ?? [];
 
   processList.innerHTML = processes.map((proc) => {
-    const key = escapeHtml(appKey(proc));
+    const key = escapeHtml(processKey(proc));
     return `
       <article class="app-row process-row" data-key="${key}">
         <div class="app-identity">
@@ -154,7 +168,7 @@ function renderProcessManager() {
         <div class="port"><span>${escapeHtml(proc.port ?? "—")}</span></div>
         <div class="pid"><code>${escapeHtml(proc.processId ?? "—")}</code><small>${escapeHtml(proc.processName ?? "")}</small></div>
         <div class="row-actions">
-          <button class="icon-button" type="button" title="로그 폴 열기" aria-label="로그 폴 열기" data-process-action="open-log" data-key="${key}">${icon("folder")}</button>
+          <button class="icon-button" type="button" title="로그 폴더 열기" aria-label="로그 폴더 열기" data-process-action="open-log" data-key="${key}">${icon("folder")}</button>
           <button class="icon-button delete" type="button" title="프로세스 종료" aria-label="프로세스 종료" data-process-action="kill" data-key="${key}">${icon("x")}</button>
         </div>
       </article>`;
@@ -171,6 +185,17 @@ function setBusy(active, message = "처리하는 중입니다.") {
 
 function setStatus(message) {
   $("#status-text").textContent = message;
+}
+
+function updateLabel(status) {
+  return {
+    available: "업데이트",
+    pending: "적용 대기",
+    current: "최신",
+    pinned: "고정",
+    error: "확인 실패",
+    unsupported: "수동 관리"
+  }[status] ?? status;
 }
 
 function toast(message, tone = "success") {
@@ -204,7 +229,7 @@ function showRemove(app) {
   openModal({
     eyebrow: "REMOVE APP",
     title: `${app.name} 삭제`,
-    content: `<p><strong>${escapeHtml(app.packageId)}/${escapeHtml(app.version)}</strong>의 소스, 데이터, 로그와 의존성을 모두 삭제합니다.</p><p class="warning">이 작업은 앱의 <code>data/</code> 폴어도 삭제하며 되돌릴 수 없습니다.</p>`,
+    content: `<p><strong>${escapeHtml(app.packageId)}/${escapeHtml(app.version)}</strong>의 소스, 데이터, 로그와 의존성을 모두 삭제합니다.</p><p class="warning">이 작업은 앱의 <code>data/</code> 폴더도 삭제하며 되돌릴 수 없습니다.</p>`,
     actions: `<button class="secondary-button" type="button" data-action="close-modal">취소</button><button class="primary-button danger-button" type="button" data-action="confirm-remove">${icon("trash")}삭제</button>`
   });
 }
@@ -215,7 +240,7 @@ function showKillProcess(proc) {
     eyebrow: "KILL PROCESS",
     title: `${proc.name} 프로세스 종료`,
     content: `<p><strong>${escapeHtml(proc.packageId)}/${escapeHtml(proc.version)}</strong>의 백엔드 프로세스(PID ${escapeHtml(proc.processId)})를 종료합니다.</p><p class="warning">프로세스를 종료하면 실행 중인 앱 창도 함께 닫힙니다.</p>`,
-    actions: `<button class="secondary-button" type="button" data-action="close-modal">취소</button><button class="primary-button danger-button" type="button" data-action="confirm-kill">${icon("trash")}종료</button>`
+    actions: `<button class="secondary-button" type="button" data-action="close-modal">취소</button><button class="primary-button danger-button" type="button" data-action="confirm-kill">${icon("x")}종료</button>`
   });
 }
 
@@ -225,6 +250,8 @@ function openSettings() {
   post({ type: "settings" });
   post({ type: "licenses" });
   post({ type: "doctor" });
+  post({ type: "appUpdateState" });
+  post({ type: "runtimeReleaseState" });
 }
 
 function closeSettings() {
@@ -242,6 +269,61 @@ function selectSettingsTab(name) {
 
 function renderSettings() {
   $("#developer-mode-toggle").checked = Boolean(state.settings.developerMode);
+  $("#automatic-app-updates-toggle").checked =
+    state.settings.automaticAppUpdates !== false;
+  $("#app-update-last-check").textContent = state.settings.lastAppUpdateCheck
+    ? `마지막 확인: ${new Date(state.settings.lastAppUpdateCheck).toLocaleString()}`
+    : "아직 업데이트를 확인하지 않았습니다.";
+}
+
+function renderAppUpdates(items = state.appUpdates) {
+  const container = $("#app-update-results");
+  if (!items?.length) {
+    container.innerHTML = '<div class="settings-empty">추적 가능한 앱 업데이트가 없습니다.</div>';
+    return;
+  }
+  container.innerHTML = items.map((item) => `
+    <div class="runtime-result update-result">
+      <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.packageId)}</small></div>
+      <div class="runtime-version"><span>${escapeHtml(item.installedVersion)}</span><small>최신 ${escapeHtml(item.latestVersion || "—")}</small></div>
+      <div class="update-result-action">
+        <b class="status-chip ${item.status === "current" ? "good" : item.status === "error" ? "error" : "warning"}">${escapeHtml(updateLabel(item.status))}</b>
+        ${item.status === "available"
+          ? `<button type="button" class="secondary-button compact-button" data-settings-app-update data-package="${escapeHtml(item.packageId)}" data-version="${escapeHtml(item.installedVersion)}">업데이트</button>`
+          : ""}
+      </div>
+    </div>`).join("");
+}
+
+function renderRuntimeBundle(bundle) {
+  state.runtimeBundle = bundle;
+  const root = $("#runtime-release");
+  const text = root.querySelector("small");
+  const download = root.querySelector("[data-runtime-download]");
+  const apply = root.querySelector("[data-runtime-apply]");
+  download.hidden = true;
+  apply.hidden = true;
+  if (!bundle) {
+    text.textContent = "아직 새 번들을 확인하지 않았습니다.";
+    return;
+  }
+  if (bundle.status === "checking") {
+    text.textContent = bundle.message || "새 번들을 확인하는 중입니다.";
+    return;
+  }
+  if (bundle.status === "error") {
+    text.textContent = bundle.message || "런타임 번들을 확인하지 못했습니다.";
+  } else if (bundle.status === "no_release") {
+    text.textContent = "아직 공개된 런타임 번들이 없습니다.";
+  } else if (bundle.status === "current") {
+    text.textContent = `v${bundle.installedVersion} · 최신 상태`;
+  } else if (bundle.status === "downloaded") {
+    text.textContent = `v${bundle.version} 다운로드 완료`;
+    apply.hidden = false;
+  } else {
+    text.textContent = `설치 ${bundle.installedVersion || "없음"} → 최신 v${bundle.version}`;
+    download.hidden = false;
+  }
 }
 
 function renderDoctor() {
@@ -259,6 +341,7 @@ function renderRuntimeResults(items) {
     current: ["최신", "good"],
     newer: ["기준보다 새 버전", "good"],
     update: ["업데이트 필요", "warning"],
+    unmanaged: ["버전 정보 없음", "muted"],
     missing: ["설치 안 됨", "muted"],
     error: ["확인 실패", "error"]
   };
@@ -303,7 +386,10 @@ document.addEventListener("click", (event) => {
       setBusy(true, "앱을 삭제하는 중입니다.");
     }
     if (action === "confirm-kill" && state.selected) {
-      post(commandFor(state.selected, "killProcess"));
+      post({
+        ...commandFor(state.selected, "killProcess"),
+        processId: state.selected.processId
+      });
       closeModal();
     }
     return;
@@ -321,6 +407,10 @@ document.addEventListener("click", (event) => {
     if (!app) return;
     const action = rowButton.dataset.rowAction;
     if (action === "run") post(commandFor(app, "run"));
+    if (action === "update") {
+      post(commandFor(app, "updateApp"));
+      setBusy(true, "앱 업데이트를 준비하는 중입니다.");
+    }
     if (action === "open-data") post(commandFor(app, "openData"));
     if (action === "remove") showRemove(app);
     return;
@@ -329,7 +419,7 @@ document.addEventListener("click", (event) => {
   const processButton = event.target.closest("[data-process-action]");
   if (processButton) {
     const key = processButton.dataset.key;
-    const proc = state.processes.find((p) => appKey(p) === key);
+    const proc = state.processes.find((p) => processKey(p) === key);
     if (!proc) return;
     const action = processButton.dataset.processAction;
     if (action === "open-log") {
@@ -358,6 +448,45 @@ settingsBackdrop.addEventListener("click", (event) => {
     return;
   }
 
+  if (event.target.closest("[data-app-update-check]")) {
+    $("#app-update-results").innerHTML = '<div class="settings-empty">업데이트를 확인하는 중입니다.</div>';
+    post({ type: "checkAppUpdates" });
+    return;
+  }
+
+  if (event.target.closest("[data-update-all]")) {
+    post({ type: "updateAllApps" });
+    setBusy(true, "앱 업데이트를 준비하는 중입니다.");
+    return;
+  }
+
+  const appUpdateButton = event.target.closest("[data-settings-app-update]");
+  if (appUpdateButton) {
+    post({
+      type: "updateApp",
+      packageId: appUpdateButton.dataset.package,
+      version: appUpdateButton.dataset.version
+    });
+    setBusy(true, "앱 업데이트를 준비하는 중입니다.");
+    return;
+  }
+
+  if (event.target.closest("[data-runtime-release-check]")) {
+    renderRuntimeBundle({ status: "checking", message: "새 번들을 확인하는 중입니다." });
+    post({ type: "checkRuntimeRelease" });
+    return;
+  }
+
+  if (event.target.closest("[data-runtime-download]")) {
+    post({ type: "downloadRuntimeUpdate" });
+    return;
+  }
+
+  if (event.target.closest("[data-runtime-apply]")) {
+    post({ type: "applyRuntimeUpdate" });
+    return;
+  }
+
   if (event.target.closest("[data-doctor-check]")) {
     $("#doctor-results").innerHTML = '<div class="settings-empty">진단을 실행하는 중입니다.</div>';
     post({ type: "doctor" });
@@ -373,6 +502,10 @@ settingsBackdrop.addEventListener("click", (event) => {
 
 $("#developer-mode-toggle").addEventListener("change", (event) => {
   post({ type: "setDeveloperMode", enabled: event.target.checked });
+});
+
+$("#automatic-app-updates-toggle").addEventListener("change", (event) => {
+  post({ type: "setAutomaticAppUpdates", enabled: event.target.checked });
 });
 
 $("#search-input").addEventListener("input", (event) => {
@@ -412,6 +545,23 @@ if (host) {
     }
     if (data.type === "runtimeCheck" && data.status === "complete") {
       renderRuntimeResults(data.items ?? []);
+    }
+    if (data.type === "appUpdates" && data.status === "complete") {
+      state.appUpdates = data.items ?? [];
+      renderAppUpdates();
+      if (data.lastChecked) {
+        $("#app-update-last-check").textContent =
+          `마지막 확인: ${new Date(data.lastChecked).toLocaleString()}`;
+      }
+    }
+    if (data.type === "runtimeRelease" && data.status === "complete") {
+      renderRuntimeBundle(data.bundle);
+    }
+    if (data.type === "runtimeDownload") {
+      const progress = $("#runtime-download-progress");
+      progress.hidden = false;
+      progress.querySelector("i").style.width = `${Math.min(100, data.percent)}%`;
+      progress.querySelector("span").textContent = `${Math.round(data.percent)}%`;
     }
     if (data.type === "licenses") {
       state.licenses = {

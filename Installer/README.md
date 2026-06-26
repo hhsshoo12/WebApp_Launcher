@@ -29,3 +29,21 @@ artifacts/
 
 Runtime/tool download URLs are pinned in `runtime-catalog.toml`. Update them
 deliberately and verify the resulting installer before release.
+
+Build the GitHub Releases runtime bundle from an existing `.webapp` runtime
+installation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Installer\build-runtime-bundle.ps1 `
+  -BundleVersion 0.1
+```
+
+Upload both generated assets to the same public release:
+
+```text
+WAPL-Runtime-v0.1.zip
+WAPL-Runtime-v0.1.zip.sha256
+```
+
+Populate `Installer\runtime-licenses\` with the license files shipped by every
+runtime and tool before publishing the bundle.

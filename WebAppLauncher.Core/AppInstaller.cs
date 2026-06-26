@@ -5,24 +5,44 @@ public sealed class AppInstaller
     private readonly WebAppPaths paths;
     private readonly ToolResolver tools;
     private readonly AppRepository repository;
+    private readonly GitSourceResolver git;
 
     public AppInstaller(WebAppPaths paths)
     {
         this.paths = paths;
         tools = new ToolResolver(paths);
         repository = new AppRepository(paths);
+        git = new GitSourceResolver(paths);
     }
 
     public async Task<InstalledApp> InstallAsync(string wapkPath, CancellationToken cancellationToken = default)
     {
         paths.EnsureRootLayout();
         var wapk = TomlManifestStore.LoadWapk(wapkPath);
-        var installDirectory = paths.GetAppDirectory(wapk.Package.Id, wapk.Package.Version);
+        var resolved = await git.ResolveAsync(wapk.Source, cancellationToken: cancellationToken);
+        var version = wapk.Format == 2 ? resolved.Commit[..8] : wapk.Package.Version;
+        var installDirectory = paths.GetAppDirectory(wapk.Package.Id, version);
+        return await InstallResolvedAsync(
+            wapk,
+            resolved,
+            installDirectory,
+            wapkPath,
+            cancellationToken);
+    }
+
+    public async Task<InstalledApp> InstallResolvedAsync(
+        WapkManifest wapk,
+        ResolvedGitSource resolved,
+        string installDirectory,
+        string? recipePath = null,
+        CancellationToken cancellationToken = default)
+    {
         var sourceDirectory = Path.Combine(installDirectory, "source");
 
         if (Directory.Exists(installDirectory))
         {
-            throw new InvalidOperationException($"App version is already installed: {wapk.Package.Id}/{wapk.Package.Version}");
+            throw new InvalidOperationException(
+                $"App version is already installed: {wapk.Package.Id}/{Path.GetFileName(installDirectory)}");
         }
 
         try
@@ -33,10 +53,12 @@ public sealed class AppInstaller
             Directory.CreateDirectory(Path.Combine(installDirectory, "logs"));
             Directory.CreateDirectory(Path.Combine(installDirectory, "temp"));
 
-            var checkoutDirectory = await CheckoutAsync(wapk, cancellationToken);
-            var appSource = SafeCombine(checkoutDirectory, wapk.Source.AppDir);
+            var appSource = SafeCombine(resolved.CheckoutDirectory, wapk.Source.AppDir);
             CopyDirectory(appSource, sourceDirectory);
-            File.Copy(wapkPath, Path.Combine(sourceDirectory, "app.wapk"), overwrite: true);
+            if (!string.IsNullOrWhiteSpace(recipePath))
+            {
+                File.Copy(recipePath, Path.Combine(sourceDirectory, "app.wapk"), overwrite: true);
+            }
 
             var htmlPath = Path.Combine(sourceDirectory, wapk.Entry.Html);
             if (!File.Exists(htmlPath))
@@ -46,19 +68,24 @@ public sealed class AppInstaller
 
             var mode = ResolveMode(wapk, sourceDirectory);
             var server = ResolveServer(wapk, sourceDirectory);
+            var package = wapk.Package with
+            {
+                Version = wapk.Format == 2 ? resolved.Commit[..8] : wapk.Package.Version
+            };
             var manifestName = $"{GetRepoName(wapk.Package.Id)}.webapp";
             var manifestPath = Path.Combine(installDirectory, manifestName);
             var manifest = new WebAppManifest(
-                1,
+                wapk.Format == 2 ? 2 : 1,
                 DateTimeOffset.UtcNow,
-                wapk.Source.Commit,
-                wapk.Package,
+                resolved.Commit,
+                package,
                 new InstalledPaths("source", "data", "logs", "temp"),
                 wapk.Runtime,
-                new EntryInfo(wapk.Entry.Html, null, null, null, mode, server),
+                new EntryInfo(wapk.Entry.Html, null, null, wapk.Entry.Icon, mode, server),
                 new NetworkInfo("127.0.0.1", 0, "dynamic"),
                 new StorageInfo("ephemeral", false, false),
-                wapk.Window);
+                wapk.Window,
+                wapk.Format == 2 ? wapk.Source : null);
 
             TomlManifestStore.SaveWebApp(manifestPath, manifest);
             var app = new InstalledApp(manifest, installDirectory, manifestPath);
@@ -80,36 +107,14 @@ public sealed class AppInstaller
     {
         var app = repository.GetInstalled(packageId, version);
         Directory.Delete(app.InstallDirectory, recursive: true);
+        var prepared = Path.Combine(paths.AppUpdates, WebAppPaths.SanitizeSegment(packageId));
+        if (Directory.Exists(prepared))
+        {
+            Directory.Delete(prepared, recursive: true);
+        }
     }
 
-    private async Task<string> CheckoutAsync(WapkManifest wapk, CancellationToken cancellationToken)
-    {
-        var cacheDirectory = Path.Combine(paths.GitCache, $"{wapk.Source.Owner}@{wapk.Source.Repo}");
-        if (!Directory.Exists(cacheDirectory))
-        {
-            var url = $"https://github.com/{wapk.Source.Owner}/{wapk.Source.Repo}.git";
-            await RunCheckedAsync(tools.Git, $"clone --no-checkout {Quote(url)} {Quote(cacheDirectory)}", paths.GitCache, cancellationToken);
-        }
-
-        await RunCheckedAsync(tools.Git, $"fetch origin {Quote(wapk.Source.Branch)}", cacheDirectory, cancellationToken);
-        await RunCheckedAsync(tools.Git, $"checkout --force {Quote(wapk.Source.Commit)}", cacheDirectory, cancellationToken);
-        var result = await CommandRunner.RunAsync(tools.Git, "rev-parse HEAD", cacheDirectory, cancellationToken: cancellationToken);
-        if (result.ExitCode != 0)
-        {
-            throw new InvalidOperationException(result.StandardError.Trim());
-        }
-
-        var actual = result.StandardOutput.Trim();
-        if (!actual.StartsWith(wapk.Source.Commit, StringComparison.OrdinalIgnoreCase) &&
-            !wapk.Source.Commit.StartsWith(actual, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"Git commit mismatch. Expected {wapk.Source.Commit}, got {actual}.");
-        }
-
-        return cacheDirectory;
-    }
-
-    private async Task InstallDependenciesAsync(InstalledApp app, CancellationToken cancellationToken)
+    public async Task InstallDependenciesAsync(InstalledApp app, CancellationToken cancellationToken = default)
     {
         if (!app.Manifest.Runtime.Python.Equals("none", StringComparison.OrdinalIgnoreCase) &&
             File.Exists(Path.Combine(app.SourceDirectory, "pyproject.toml")) &&
@@ -161,7 +166,7 @@ public sealed class AppInstaller
         return null;
     }
 
-    private static string SafeCombine(string root, string relative)
+    internal static string SafeCombine(string root, string relative)
     {
         var fullRoot = Path.GetFullPath(root);
         var fullPath = Path.GetFullPath(Path.Combine(fullRoot, relative));
@@ -173,7 +178,7 @@ public sealed class AppInstaller
         return fullPath;
     }
 
-    private static void CopyDirectory(string source, string destination)
+    internal static void CopyDirectory(string source, string destination)
     {
         Directory.CreateDirectory(destination);
         foreach (var directory in EnumerateDirectories(source))
