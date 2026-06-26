@@ -62,16 +62,27 @@ nav { padding-top: 2px; border-top: 1px solid #343c3d; }
   cursor: pointer;
 }
 .nav-item {
+  position: relative;
   gap: 10px;
   height: 42px;
   margin-top: 12px;
   padding: 0 11px;
   color: #dce2e2;
   border-radius: 6px;
-  font-weight: 600;
+  font-weight: 650;
   text-align: left;
 }
-.nav-item.active { color: #fff; background: var(--sidebar-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.nav-item.active { color: #fff; background: var(--sidebar-soft); }
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
 .nav-count { min-width: 24px; margin-left: auto; padding: 2px 6px; color: #b8c1c2; background: #1a1f20; border-radius: 10px; text-align: center; font: 11px/16px "Cascadia Mono", Consolas, monospace; }
 
 .sidebar-actions { margin-top: auto; padding-top: 12px; }
@@ -79,7 +90,7 @@ nav { padding-top: 2px; border-top: 1px solid #343c3d; }
 .text-action:hover { color: #fff; background: #293031; }
 .text-action.active { color: #fff; background: var(--sidebar-soft); }
 
-main { display: grid; grid-template-rows: auto minmax(0, 1fr) 38px; min-width: 0; min-height: 0; }
+main { display: grid; grid-template-rows: minmax(0, 1fr) 38px; min-width: 0; min-height: 0; }
 
 .view { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 .view[hidden] { display: none; }
@@ -152,7 +163,19 @@ h2 { font-size: 20px; }
   align-items: center;
   column-gap: 16px;
 }
-.list-head { min-height: 34px; padding: 0 18px; color: #778183; border-bottom: 1px solid var(--line-strong); font-size: 11px; font-weight: 650; }
+.list-head {
+  min-height: 34px;
+  padding: 0 18px;
+  color: #778183;
+  border-left: 1px solid transparent;
+  border-right: 1px solid transparent;
+  border-bottom: 1px solid var(--line-strong);
+  font-size: 11px;
+  font-weight: 650;
+}
+.list-head span:last-child {
+  text-align: right;
+}
 .app-list { background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); }
 .app-row { min-height: 80px; padding: 11px 18px; border-bottom: 1px solid var(--line); }
 .app-row:last-child { border-bottom: 0; }
