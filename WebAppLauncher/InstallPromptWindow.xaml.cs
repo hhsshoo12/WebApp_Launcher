@@ -10,12 +10,16 @@ public partial class InstallPromptWindow : Window
     private readonly string packagePath;
     private readonly WebAppPaths paths = new();
     private readonly AppInstaller installer;
+    private readonly AppShortcutService shortcutService;
     private bool installInProgress;
+    private bool installSucceeded;
+    private InstalledApp? installedApp;
 
-    public InstallPromptWindow(string packagePath)
+    public InstallPromptWindow(string packagePath, AppShortcutService? shortcutService = null)
     {
         this.packagePath = packagePath;
         installer = new AppInstaller(paths);
+        this.shortcutService = shortcutService ?? new AppShortcutService();
         InitializeComponent();
         Loaded += OnLoaded;
     }
@@ -83,8 +87,13 @@ public partial class InstallPromptWindow : Window
         ShowStatus("앱 소스와 의존성을 설치하는 중입니다.");
         try
         {
-            var app = await installer.InstallAsync(packagePath);
-            ShowStatus($"{app.Manifest.Package.Name} {app.Manifest.Package.Version}을(를) 설치했습니다.");
+            installedApp = await installer.InstallAsync(packagePath);
+            installSucceeded = true;
+            ShowStatus($"{installedApp.Manifest.Package.Name} {installedApp.Manifest.Package.Version}을(를) 설치했습니다.");
+            InstallButton.Content = "바탕화면 바로가기 만들기";
+            InstallButton.IsEnabled = true;
+            InstallButton.Click -= InstallButton_Click;
+            InstallButton.Click += ShortcutButton_Click;
         }
         catch (Exception ex)
         {
@@ -92,10 +101,34 @@ public partial class InstallPromptWindow : Window
         }
         finally
         {
-            InstallButton.Visibility = Visibility.Collapsed;
-            CancelButton.Content = "닫기";
-            CancelButton.IsEnabled = true;
+            if (!installSucceeded)
+            {
+                CancelButton.Content = "닫기";
+                CancelButton.IsEnabled = true;
+            }
             installInProgress = false;
+        }
+    }
+
+    private void ShortcutButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (installedApp is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var launcherPath = Environment.ProcessPath
+                ?? throw new InvalidOperationException("런처 경로를 확인할 수 없습니다.");
+            var shortcutPath = shortcutService.CreateDesktopShortcut(installedApp, launcherPath);
+            ShowStatus($"바탕화면 바로가기를 만들었습니다: {shortcutPath}");
+            InstallButton.IsEnabled = false;
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"바로가기 만들기 실패: {ex.Message}");
+            InstallButton.IsEnabled = false;
         }
     }
 

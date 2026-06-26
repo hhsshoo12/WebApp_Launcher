@@ -221,11 +221,49 @@ public partial class MainWindow : Window
         {
             var app = await installer.InstallAsync(dialog.FileName);
             SendState($"{app.Manifest.Package.Name} {app.Manifest.Package.Version}을 설치했습니다.");
+            OfferDesktopShortcut(app);
         }
         catch
         {
             Send(new { type = "idle" });
             throw;
+        }
+    }
+
+    private void OfferDesktopShortcut(InstalledApp app)
+    {
+        var result = MessageBox.Show(
+            this,
+            $"{app.Manifest.Package.Name}의 바탕화면 바로가기를 만들까요?",
+            "바로가기 만들기",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var launcherPath = Environment.ProcessPath
+                ?? throw new InvalidOperationException("런처 경로를 확인할 수 없습니다.");
+            var shortcutService = new AppShortcutService();
+            var shortcutPath = shortcutService.CreateDesktopShortcut(app, launcherPath);
+            Send(new
+            {
+                type = "toast",
+                tone = "success",
+                message = $"바탕화면 바로가기를 만들었습니다: {shortcutPath}"
+            });
+        }
+        catch (Exception ex)
+        {
+            Send(new
+            {
+                type = "toast",
+                tone = "error",
+                message = $"바로가기 만들기 실패: {ex.Message}"
+            });
         }
     }
 

@@ -75,4 +75,19 @@ public sealed class AppRepository
             _ => throw new InvalidOperationException($"Multiple versions installed for {packageId}. Specify --version.")
         };
     }
+
+    public InstalledApp? FindByManifestPath(string manifestPath)
+    {
+        if (string.IsNullOrWhiteSpace(manifestPath))
+        {
+            return null;
+        }
+
+        var normalized = Path.GetFullPath(manifestPath);
+        return ListInstalled()
+            .FirstOrDefault(app => string.Equals(
+                Path.GetFullPath(app.ManifestPath),
+                normalized,
+                StringComparison.OrdinalIgnoreCase));
+    }
 }
