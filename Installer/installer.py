@@ -168,6 +168,91 @@ def escape_powershell(value: str) -> str:
     return value.replace("'", "''")
 
 
+def webapp_root() -> Path:
+    return Path.home() / ".webapp"
+
+
+def find_running_launcher_processes() -> list[int]:
+    """Return PIDs of running WebAppLauncher.exe processes (excluding the current process)."""
+    current_pid = os.getpid()
+    pids: list[int] = []
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq WebAppLauncher.exe", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
+        )
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line or not line.startswith('"'):
+                continue
+            parts = [part.strip('"') for part in line.split('","')]
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[1])
+                if pid != current_pid:
+                    pids.append(pid)
+            except ValueError:
+                continue
+    except FileNotFoundError:
+        pass
+    return pids
+
+
+def kill_running_launcher_processes() -> bool:
+    """Terminate running WebAppLauncher.exe processes. Returns True if successful."""
+    pids = find_running_launcher_processes()
+    if not pids:
+        return True
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "WebAppLauncher.exe"],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
+        )
+        return len(find_running_launcher_processes()) == 0
+    except FileNotFoundError:
+        return False
+
+
+def is_runtime_installed() -> bool:
+    """Check whether .webapp runtime or tools directories are populated."""
+    root = webapp_root()
+    for name in ("runtime", "tools"):
+        path = root / name
+        if path.is_dir():
+            try:
+                if any(path.iterdir()):
+                    return True
+            except OSError:
+                pass
+    return False
+
+
+def remove_runtime_data(progress: object | None = None) -> None:
+    """Remove .webapp/runtime and .webapp/tools directories."""
+    root = webapp_root()
+    targets = [root / "runtime", root / "tools"]
+    for target in targets:
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+            if callable(progress):
+                progress(target.name)
+
+
+def remove_webapp_apps(progress: object | None = None) -> None:
+    """Remove installed web apps under .webapp/app."""
+    app_dir = webapp_root() / "app"
+    if app_dir.is_dir():
+        shutil.rmtree(app_dir, ignore_errors=True)
+        if callable(progress):
+            progress("app")
+
+
 class InstallerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -203,6 +288,7 @@ class InstallerApp:
         self.start_menu = tk.BooleanVar(value=True)
         self.launch_after_install = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="설치를 준비하고 있습니다.")
+        self.cleanup_option = tk.StringVar(value="keep")
 
         self._configure_styles()
         self._build_shell()
@@ -336,7 +422,7 @@ class InstallerApp:
         tk.Label(
             frame,
             text="복구는 프로그램 파일과 선택한 실행 환경을 다시 설치합니다.\n"
-            "삭제해도 사용자 폴더의 .webapp 앱과 데이터는 유지됩니다.",
+            "삭제 시 .webapp의 웹앱과 런타임 정리 옵션을 선택할 수 있습니다.",
             anchor=tk.W,
             justify=tk.LEFT,
             wraplength=430,
@@ -592,9 +678,42 @@ class InstallerApp:
         if self.existing_install_dir is None:
             messagebox.showerror(PRODUCT_NAME, "기존 설치 위치를 찾을 수 없습니다.")
             return
+
+        if find_running_launcher_processes():
+            if not messagebox.askyesno(
+                PRODUCT_NAME,
+                "앱이 실행되어 있습니다.\n앱을 종료하고 진행할까요?",
+                icon="warning",
+            ):
+                return
+            if not kill_running_launcher_processes():
+                messagebox.showerror(
+                    PRODUCT_NAME,
+                    "실행 중인 앱을 종료할 수 없습니다.\n"
+                    "직접 종료한 뒤 다시 시도하십시오.",
+                )
+                return
+
         self.operation = "repair"
-        self.install_runtimes.set(True)
         self.start_menu.set(True)
+
+        if is_runtime_installed():
+            answer = messagebox.askyesnocancel(
+                PRODUCT_NAME,
+                "이미 런타임이 설치되어 있습니다. 재설치하시겠습니까?\n\n"
+                "예: 기존 런타임을 지우고 다시 설치\n"
+                "아니오: 런타임 설치를 건너뛰고 프로그램만 복구\n"
+                "취소: 복구를 취소",
+                icon="question",
+            )
+            if answer is None:
+                return
+            self.install_runtimes.set(bool(answer))
+            if answer:
+                remove_runtime_data()
+        else:
+            self.install_runtimes.set(True)
+
         self._begin_install(self.existing_install_dir)
 
     def _begin_install(self, destination: Path) -> None:
@@ -626,15 +745,120 @@ class InstallerApp:
             daemon=True,
         ).start()
 
+    def _show_cleanup_dialog(self) -> str | None:
+        """Show a modal dropdown asking how to clean up .webapp data. Returns 'all', 'runtime', or 'keep'; None if cancelled."""
+        result: list[str | None] = [None]
+
+        window = tk.Toplevel(self.root)
+        window.title(PRODUCT_NAME)
+        window.resizable(False, False)
+        window.transient(self.root)
+        window.grab_set()
+
+        frame = tk.Frame(window, background="#ffffff", padx=24, pady=24)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(
+            frame,
+            text="설치된 웹앱과 런타임을 지우겠습니까?",
+            anchor=tk.W,
+            background="#ffffff",
+            foreground="#171719",
+            font=("Segoe UI Semibold", 12),
+        ).pack(fill=tk.X)
+        tk.Label(
+            frame,
+            text="프로그램 파일은 항상 삭제됩니다. 사용자 폴더의 .webapp 데이터 처리 방식을 선택하십시오.",
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=360,
+            background="#ffffff",
+            foreground="#4b4b4f",
+            font=("Segoe UI", 10),
+        ).pack(fill=tk.X, pady=(8, 16))
+
+        options = [
+            ("모두 삭제하기", "all", "설치된 웹앱과 런타임, 도구를 모두 삭제합니다."),
+            ("런타임만 삭제하기", "runtime", "실행 환경과 도구만 삭제하고 웹앱은 유지합니다."),
+            ("삭제하지 않기", "keep", ".webapp 폴더의 앱과 데이터를 그대로 둡니다."),
+        ]
+        selected = tk.StringVar(value="keep")
+        combobox = ttk.Combobox(
+            frame,
+            values=[label for label, _, _ in options],
+            state="readonly",
+            width=38,
+        )
+        combobox.current(2)
+        combobox.pack(fill=tk.X)
+
+        description = tk.Label(
+            frame,
+            text=options[2][2],
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=360,
+            background="#ffffff",
+            foreground="#6a6a6f",
+            font=("Segoe UI", 9),
+        )
+        description.pack(fill=tk.X, pady=(10, 0))
+
+        def on_select(_event: object | None = None) -> None:
+            label = combobox.get()
+            for opt_label, opt_value, opt_desc in options:
+                if opt_label == label:
+                    selected.set(opt_value)
+                    description.config(text=opt_desc)
+                    break
+
+        combobox.bind("<<ComboboxSelected>>", on_select)
+
+        button_frame = tk.Frame(frame, background="#ffffff")
+        button_frame.pack(fill=tk.X, pady=(20, 0))
+
+        def on_ok() -> None:
+            result[0] = selected.get()
+            window.destroy()
+
+        def on_cancel() -> None:
+            result[0] = None
+            window.destroy()
+
+        ttk.Button(button_frame, text="아니오(취소)", command=on_cancel).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(button_frame, text="예", command=on_ok, default="active").pack(side=tk.RIGHT)
+
+        window.protocol("WM_DELETE_WINDOW", on_cancel)
+        window.update_idletasks()
+        x = self.root.winfo_x() + max(0, (self.root.winfo_width() - window.winfo_reqwidth()) // 2)
+        y = self.root.winfo_y() + max(0, (self.root.winfo_height() - window.winfo_reqheight()) // 2)
+        window.geometry(f"{window.winfo_reqwidth()}x{window.winfo_reqheight()}+{x}+{y}")
+        self.root.wait_window(window)
+        return result[0]
+
     def _start_remove(self) -> None:
         if self.running or self.existing_install_dir is None:
             return
-        if not messagebox.askyesno(
-            PRODUCT_NAME,
-            "WebApp Launcher를 삭제하시겠습니까?\n\n"
-            "사용자 폴더의 .webapp 앱과 데이터는 유지됩니다.",
-        ):
+
+        if find_running_launcher_processes():
+            if not messagebox.askyesno(
+                PRODUCT_NAME,
+                "앱이 실행되어 있습니다.\n앱을 종료하고 진행할까요?",
+                icon="warning",
+            ):
+                return
+            if not kill_running_launcher_processes():
+                messagebox.showerror(
+                    PRODUCT_NAME,
+                    "실행 중인 앱을 종료할 수 없습니다.\n"
+                    "직접 종료한 뒤 다시 시도하십시오.",
+                )
+                return
+
+        cleanup = self._show_cleanup_dialog()
+        if cleanup is None:
             return
+        self.cleanup_option.set(cleanup)
 
         self.operation = "remove"
         self.running = True
@@ -648,6 +872,7 @@ class InstallerApp:
             args=(self.existing_install_dir,),
             daemon=True,
         ).start()
+
 
     def _install_worker(
         self,
@@ -698,6 +923,15 @@ class InstallerApp:
                 )
 
             remove_installation(destination, report)
+
+            cleanup = self.cleanup_option.get()
+            if cleanup in {"all", "runtime"}:
+                self.messages.put(("status", "런타임과 도구를 정리하는 중..."))
+                remove_runtime_data(lambda name: self.messages.put(("log", f"정리: .webapp/{name}")))
+            if cleanup == "all":
+                self.messages.put(("status", "설치된 웹앱을 정리하는 중..."))
+                remove_webapp_apps(lambda name: self.messages.put(("log", f"정리: .webapp/{name}")))
+
             self.messages.put(("removed", None))
         except Exception as exc:
             self.messages.put(("error", str(exc)))
