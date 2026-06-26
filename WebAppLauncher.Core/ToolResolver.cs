@@ -11,7 +11,7 @@ public sealed class ToolResolver
 
     public string Git => Resolve(paths.GitExecutable, "git");
     public string Uv => Resolve(paths.UvExecutable, "uv");
-    public string Pnpm => ResolveAny([paths.PnpmExecutable, Path.Combine(paths.Tools, "pnpm", "pnpm.exe")], "pnpm");
+    public string Pnpm => ResolvePnpm();
 
     public string ResolvePython(string runtime)
     {
@@ -39,7 +39,7 @@ public sealed class ToolResolver
         [
             Describe("git", paths.GitExecutable, "git"),
             Describe("uv", paths.UvExecutable, "uv"),
-            Describe("pnpm", paths.PnpmExecutable, "pnpm"),
+            Describe("pnpm", ResolvePnpm(), "pnpm"),
             Describe("python313", paths.GetPythonExecutable("python313"), "python"),
             Describe("python314", paths.GetPythonExecutable("python314"), "python"),
             Describe("nodejs-lts-22", paths.GetNodeExecutable("nodejs-lts-22"), "node"),
@@ -47,24 +47,27 @@ public sealed class ToolResolver
         ];
     }
 
+    private string ResolvePnpm()
+    {
+        var exe = Path.Combine(paths.Tools, "pnpm", "pnpm.exe");
+        if (File.Exists(exe))
+        {
+            return exe;
+        }
+
+        if (File.Exists(paths.PnpmExecutable))
+        {
+            return paths.PnpmExecutable;
+        }
+
+        return "pnpm";
+    }
+
     private static string Resolve(string bundledPath, string commandName)
     {
         if (File.Exists(bundledPath))
         {
             return bundledPath;
-        }
-
-        return commandName;
-    }
-
-    private static string ResolveAny(IEnumerable<string> bundledPaths, string commandName)
-    {
-        foreach (var bundledPath in bundledPaths)
-        {
-            if (File.Exists(bundledPath))
-            {
-                return bundledPath;
-            }
         }
 
         return commandName;
