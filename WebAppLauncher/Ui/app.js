@@ -68,9 +68,6 @@ function setView(name) {
   if (name === "processes") {
     post({ type: "processManager" });
   }
-  setStatus(name === "apps"
-    ? `${state.apps.length}개의 앱이 준비되어 있습니다.`
-    : "프로세스 관리자");
 }
 
 function render() {
@@ -181,10 +178,6 @@ function renderProcessManager() {
 function setBusy(active, message = "처리하는 중입니다.") {
   busyLayer.hidden = !active;
   $("#busy-text").textContent = message;
-}
-
-function setStatus(message) {
-  $("#status-text").textContent = message;
 }
 
 function updateLabel(status) {
@@ -524,7 +517,6 @@ if (host) {
       state.apps = data.apps ?? [];
       state.root = data.root ?? "";
       setBusy(false);
-      setStatus(`${state.apps.length}개의 앱이 준비되어 있습니다.`);
       render();
       if (data.notification) toast(data.notification);
     }
@@ -573,7 +565,6 @@ if (host) {
     if (data.type === "toast") toast(data.message, data.tone);
     if (data.type === "error") {
       setBusy(false);
-      setStatus(data.message);
       toast(data.message, "error");
     }
   });
@@ -590,6 +581,5 @@ if (host) {
     { packageId: "studio@note-grid", name: "Note Grid", version: "2.4", runtime: "nodejs-lts-24", mode: "server", port: 52002, processId: 5678, processName: "node.exe", logPath: "C:\\Users\\user\\.webapp\\app\\...\\logs\\...log" }
   ];
   state.processPorts = { occupied: 2, total: 1000, percent: 0.2, values: [52001, 52002] };
-  setStatus("미리보기 모드");
   render();
 }

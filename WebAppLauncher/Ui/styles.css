@@ -181,9 +181,8 @@ h2 { font-size: 20px; }
 .empty-symbol .icon { width: 26px; height: 26px; }
 .empty-state p { margin: 10px auto 22px; color: var(--muted); }
 
-.statusbar { display: flex; align-items: center; min-width: 0; padding: 0 17px; color: #647072; background: #e8ecec; border-top: 1px solid #d3d9d9; font-size: 11px; }
-.status-dot { width: 7px; height: 7px; margin-right: 8px; background: var(--accent); border-radius: 50%; }
-.statusbar code { margin-left: auto; overflow: hidden; color: #7c8788; text-overflow: ellipsis; white-space: nowrap; font: 10px "Cascadia Mono", Consolas, monospace; }
+.statusbar { display: flex; align-items: center; justify-content: flex-end; min-width: 0; padding: 0 17px; color: #647072; background: #e8ecec; border-top: 1px solid #d3d9d9; font-size: 11px; }
+.statusbar code { overflow: hidden; color: #7c8788; text-overflow: ellipsis; white-space: nowrap; font: 10px "Cascadia Mono", Consolas, monospace; }
 
 .busy-layer { position: fixed; inset: 0; z-index: 20; display: grid; place-content: center; background: rgb(243 245 245 / 86%); backdrop-filter: blur(2px); }
 .busy-layer[hidden] { display: none; }
