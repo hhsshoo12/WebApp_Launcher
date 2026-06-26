@@ -165,14 +165,34 @@
       </header>
       <div class="settings-layout">
         <nav class="settings-tabs" aria-label="설정 항목">
-          <button type="button" class="settings-tab active" data-settings-tab="updates">앱 업데이트</button>
+          <button type="button" class="settings-tab active" data-settings-tab="launcher">런처</button>
+          <button type="button" class="settings-tab" data-settings-tab="updates">앱 업데이트</button>
           <button type="button" class="settings-tab" data-settings-tab="runtime">런타임</button>
           <button type="button" class="settings-tab" data-settings-tab="developer">개발</button>
           <button type="button" class="settings-tab" data-settings-tab="doctor">환경 진단</button>
           <button type="button" class="settings-tab" data-settings-tab="licenses">라이선스</button>
         </nav>
         <div class="settings-content">
-          <section class="settings-panel active" data-settings-panel="updates">
+          <section class="settings-panel active" data-settings-panel="launcher">
+            <div class="settings-panel-heading">
+              <div><p class="settings-kicker">LAUNCHER UPDATE</p><h3>WebApp Launcher</h3></div>
+              <div class="settings-actions">
+                <button type="button" class="secondary-button" data-launcher-check>새 버전 확인</button>
+              </div>
+            </div>
+            <p class="settings-description">설치된 런처는 GitHub Release에서 직접 새 버전을 받아 교체합니다. 업데이트는 저장된 Setup.exe가 처리하며, 런처는 새 버전으로 자동 재시작됩니다.</p>
+            <div id="launcher-update" class="update-banner">
+              <div>
+                <strong>현재 버전</strong>
+                <small id="launcher-update-detail">런처 버전 정보를 불러오는 중입니다.</small>
+              </div>
+              <div class="settings-actions">
+                <button type="button" class="primary-button" data-launcher-update hidden>업데이트</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="updates">
             <div class="settings-panel-heading">
               <div><p class="settings-kicker">GIT DELIVERY</p><h3>앱 업데이트</h3></div>
               <div class="settings-actions">

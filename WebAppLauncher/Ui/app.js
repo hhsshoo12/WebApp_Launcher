@@ -12,7 +12,9 @@ const state = {
   processes: [],
   processPorts: { occupied: 0, total: 1000, percent: 0, values: [] },
   appUpdates: [],
-  runtimeBundle: null
+  runtimeBundle: null,
+  launcherVersion: "",
+  launcherUpdate: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -245,6 +247,7 @@ function openSettings() {
   post({ type: "doctor" });
   post({ type: "appUpdateState" });
   post({ type: "runtimeReleaseState" });
+  post({ type: "checkLauncherUpdate" });
 }
 
 function closeSettings() {
@@ -346,6 +349,46 @@ function renderRuntimeResults(items) {
       <b class="status-chip ${tone}">${label}</b>
     </div>`;
   }).join("");
+}
+
+function renderLauncherUpdate() {
+  const root = $("#launcher-update");
+  if (!root) return;
+  const detail = root.querySelector("#launcher-update-detail");
+  const checkButton = root.querySelector("[data-launcher-check]");
+  const updateButton = root.querySelector("[data-launcher-update]");
+  if (updateButton) updateButton.hidden = true;
+  if (!state.launcherVersion) {
+    detail.textContent = "런처 버전 정보를 불러오는 중입니다.";
+    return;
+  }
+  const update = state.launcherUpdate;
+  if (!update) {
+    detail.textContent = `설치 v${state.launcherVersion} · 아직 새 버전을 확인하지 않았습니다.`;
+    return;
+  }
+  if (update.status === "checking") {
+    detail.textContent = "GitHub Release에서 새 버전을 확인하는 중입니다.";
+    return;
+  }
+  if (update.status === "no_state") {
+    detail.textContent = `설치 v${state.launcherVersion} · 설치된 런처 상태 파일을 찾지 못해 업데이트를 확인할 수 없습니다.`;
+    return;
+  }
+  if (update.status === "error") {
+    detail.textContent = `확인 실패: ${update.message || "GitHub 응답을 받지 못했습니다."}`;
+    return;
+  }
+  if (update.status === "no_release") {
+    detail.textContent = `설치 v${state.launcherVersion} · GitHub에 v* 릴리스가 아직 없습니다.`;
+    return;
+  }
+  if (update.status === "current") {
+    detail.textContent = `설치 v${update.installedVersion} · 최신 상태`;
+    return;
+  }
+  detail.textContent = `설치 v${update.installedVersion} → 최신 v${update.latestVersion}`;
+  if (updateButton) updateButton.hidden = false;
 }
 
 function renderLicense() {
@@ -486,6 +529,19 @@ settingsBackdrop.addEventListener("click", (event) => {
     return;
   }
 
+  if (event.target.closest("[data-launcher-check]")) {
+    state.launcherUpdate = { status: "checking" };
+    renderLauncherUpdate();
+    post({ type: "checkLauncherUpdate" });
+    return;
+  }
+
+  const launcherUpdateButton = event.target.closest("[data-launcher-update]");
+  if (launcherUpdateButton) {
+    post({ type: "runLauncherUpdate" });
+    return;
+  }
+
   const licenseTab = event.target.closest("[data-license-tab]");
   if (licenseTab) {
     state.activeLicense = licenseTab.dataset.licenseTab;
@@ -516,8 +572,10 @@ if (host) {
     if (data.type === "state") {
       state.apps = data.apps ?? [];
       state.root = data.root ?? "";
+      state.launcherVersion = data.launcherVersion ?? state.launcherVersion;
       setBusy(false);
       render();
+      renderLauncherUpdate();
       if (data.notification) toast(data.notification);
     }
     if (data.type === "busy") setBusy(true, data.message);
@@ -554,6 +612,10 @@ if (host) {
       progress.hidden = false;
       progress.querySelector("i").style.width = `${Math.min(100, data.percent)}%`;
       progress.querySelector("span").textContent = `${Math.round(data.percent)}%`;
+    }
+    if (data.type === "launcherUpdate" && data.status === "complete") {
+      state.launcherUpdate = data.update;
+      renderLauncherUpdate();
     }
     if (data.type === "licenses") {
       state.licenses = {

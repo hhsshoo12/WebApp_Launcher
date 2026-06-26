@@ -20,6 +20,8 @@ public partial class MainWindow : Window
     private readonly AppUpdateManager updateManager;
     private readonly RuntimeUpdateManager runtimeUpdateManager;
     private readonly LauncherSettingsStore settingsStore;
+    private readonly InstallStateStore installStateStore;
+    private readonly LauncherUpdateManager launcherUpdateManager;
     private LauncherSettings settings;
     private readonly List<ActiveSession> activeSessions = [];
     private readonly Dictionary<string, AppUpdateStatus> updateStatuses =
@@ -27,6 +29,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, PreparedAppUpdate> preparedUpdates =
         new(StringComparer.OrdinalIgnoreCase);
     private RuntimeBundleInfo? runtimeBundle;
+    private LauncherReleaseInfo? launcherUpdate;
 
     public MainWindow()
     {
@@ -36,6 +39,8 @@ public partial class MainWindow : Window
         updateManager = new AppUpdateManager(paths);
         runtimeUpdateManager = new RuntimeUpdateManager(paths);
         settingsStore = new LauncherSettingsStore(paths);
+        installStateStore = InstallStateStore.ForDirectory(AppContext.BaseDirectory);
+        launcherUpdateManager = new LauncherUpdateManager(installStateStore);
         settings = settingsStore.Load();
         foreach (var prepared in updateManager.ListPrepared())
         {
@@ -188,6 +193,12 @@ public partial class MainWindow : Window
                     break;
                 case "setAutomaticAppUpdates":
                     SetAutomaticAppUpdates(command);
+                    break;
+                case "checkLauncherUpdate":
+                    await CheckLauncherUpdateAsync();
+                    break;
+                case "runLauncherUpdate":
+                    RunLauncherUpdate();
                     break;
                 case "licenses":
                     SendLicenses();
@@ -455,6 +466,7 @@ public partial class MainWindow : Window
         {
             type = "state",
             root = paths.Root,
+            launcherVersion = LauncherVersion.Current,
             apps,
             notification
         });
@@ -704,6 +716,45 @@ public partial class MainWindow : Window
         settings = settings with { AutomaticAppUpdates = command.Enabled.Value };
         settingsStore.Save(settings);
         SendSettings();
+    }
+
+    private async Task CheckLauncherUpdateAsync()
+    {
+        Send(new { type = "launcherUpdate", status = "checking" });
+        launcherUpdate = await launcherUpdateManager.CheckAsync();
+        Send(new { type = "launcherUpdate", status = "complete", update = launcherUpdate });
+    }
+
+    private void RunLauncherUpdate()
+    {
+        var state = launcherUpdateManager.GetInstallState();
+        if (state is null)
+        {
+            SendError("설치된 런처의 상태 파일을 찾을 수 없습니다.");
+            return;
+        }
+
+        try
+        {
+            launcherUpdateManager.TriggerUpdate(state);
+        }
+        catch (FileNotFoundException ex)
+        {
+            SendError(ex.Message);
+            return;
+        }
+        catch (Exception ex)
+        {
+            SendError($"업데이트를 시작할 수 없습니다: {ex.Message}");
+            return;
+        }
+
+        SendState("런처 업데이트를 시작했습니다. 잠시 후 새 버전이 실행됩니다.");
+        foreach (var session in activeSessions.ToArray())
+        {
+            session.Window.Close();
+        }
+        Application.Current.Shutdown();
     }
 
     private void SendAppUpdateState()

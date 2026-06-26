@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import argparse
 import base64
 import ctypes
+import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import tkinter as tk
+import urllib.error
+import urllib.request
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -18,13 +27,18 @@ try:
 except ImportError:
     winreg = None
 
+try:
+    from version import __version__ as SETUP_VERSION
+except ImportError:
+    SETUP_VERSION = "0.0.0+local"
+
 
 PRODUCT_NAME = "WebApp Launcher"
-PAYLOAD_DIR_NAME = "payload"
 WINDOW_WIDTH = 680
 WINDOW_HEIGHT = 430
 SIDEBAR_WIDTH = 150
 INSTALL_STATE_FILE = ".webapp-launcher-install.json"
+INSTALL_STATE_FORMAT = 2
 REGISTRY_KEY = r"Software\WebAppLauncher"
 REGISTRY_INSTALL_VALUE = "InstallLocation"
 ASSOC_CLASSES_ROOT = r"Software\Classes"
@@ -38,6 +52,19 @@ ASSOC_EXTENSIONS = {
     ".wapk": ASSOC_WAPK_PROGID,
     ".webapp": ASSOC_WEBAPP_PROGID,
 }
+
+GITHUB_REPO = "hhsshoo12/WebApp_Launcher"
+GITHUB_API_BASE = "https://api.github.com"
+LAUNCHER_TAG_PREFIX = "v"
+RUNTIME_TAG_PREFIX = "runtime-"
+LAUNCHER_ASSET_PATTERN = re.compile(
+    r"^WAPL-Launcher-v(?P<version>[^/]+)\.zip$", re.IGNORECASE
+)
+BOOTSTRAPPER_STORAGE_DIR = Path.home() / ".wapk" / "bootstrapper"
+BOOTSTRAPPER_STORAGE_FILENAME = "WebAppLauncher-Setup.exe"
+HTTP_USER_AGENT = "WebAppLauncher-Setup/{0}".format(SETUP_VERSION)
+HTTP_TIMEOUT_SECONDS = 30
+NETWORK_ERROR_MESSAGE = "인터넷 연결 또는 GitHub 접근이 필요합니다"
 
 
 class InstallCancelled(Exception):
@@ -65,6 +92,18 @@ def start_menu_shortcut() -> Path:
     return programs / f"{PRODUCT_NAME}.lnk"
 
 
+def bootstrapper_storage_path() -> Path:
+    return BOOTSTRAPPER_STORAGE_DIR / BOOTSTRAPPER_STORAGE_FILENAME
+
+
+def is_setup_executable(path: Path) -> bool:
+    """Return True if the given path looks like a usable Setup.exe."""
+    if not path.is_file():
+        return False
+    name = path.name.lower()
+    return name in {"webapplauncher-setup.exe", "webapplauncher-setup-v.exe"}
+
+
 def read_registered_install_dir() -> Path | None:
     if winreg is None:
         return None
@@ -76,12 +115,30 @@ def read_registered_install_dir() -> Path | None:
     return Path(value) if isinstance(value, str) and value.strip() else None
 
 
-def write_install_state(destination: Path) -> None:
-    state = {
-        "format": 1,
+def read_install_state(destination: Path) -> dict | None:
+    state_path = destination / INSTALL_STATE_FILE
+    if not state_path.is_file():
+        return None
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def write_install_state(
+    destination: Path,
+    *,
+    version: str,
+    setup_path: Path | None = None,
+) -> None:
+    state: dict[str, object] = {
+        "format": INSTALL_STATE_FORMAT,
         "product": PRODUCT_NAME,
+        "version": version,
         "install_location": str(destination.resolve()),
     }
+    if setup_path is not None:
+        state["setup_path"] = str(setup_path.resolve())
     (destination / INSTALL_STATE_FILE).write_text(
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -95,6 +152,28 @@ def write_install_state(destination: Path) -> None:
                 winreg.REG_SZ,
                 str(destination.resolve()),
             )
+
+
+def upgrade_install_state_v1(destination: Path) -> str:
+    """Best-effort migration for old format 1 install states.
+
+    Returns the resolved installed version (defaults to the build version
+    when the previous install did not record one).
+    """
+    state = read_install_state(destination)
+    if state is None:
+        return SETUP_VERSION
+    if state.get("format") == INSTALL_STATE_FORMAT and state.get("version"):
+        return str(state["version"])
+    version = str(state.get("version") or SETUP_VERSION)
+    setup_path: Path | None = None
+    stored_setup = state.get("setup_path")
+    if isinstance(stored_setup, str) and stored_setup.strip():
+        candidate = Path(stored_setup)
+        if candidate.is_file():
+            setup_path = candidate
+    write_install_state(destination, version=version, setup_path=setup_path)
+    return version
 
 
 def clear_registered_install_dir() -> None:
@@ -180,6 +259,248 @@ def _notify_shell_associations_changed() -> None:
         ctypes.windll.shell32.SHChangeNotify(0x08000000, 0x0000, 0, 0)
     except Exception:
         pass
+
+
+class NetworkError(RuntimeError):
+    """Raised when the installer cannot reach GitHub or the payload is invalid."""
+
+
+def _http_get_json(url: str) -> object:
+    request = urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT, "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise NetworkError(f"{NETWORK_ERROR_MESSAGE} ({exc})") from exc
+
+
+def _http_download_to_file(
+    url: str, destination: Path, on_progress: object | None = None
+) -> None:
+    request = urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            total_header = response.headers.get("Content-Length")
+            total_bytes = int(total_header) if total_header and total_header.isdigit() else -1
+            downloaded = 0
+            last_reported = -1
+            with destination.open("wb") as target:
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    target.write(chunk)
+                    downloaded += len(chunk)
+                    if callable(on_progress) and total_bytes > 0:
+                        percent = int(downloaded * 100 / total_bytes)
+                        if percent != last_reported:
+                            on_progress(downloaded, total_bytes, percent)
+                            last_reported = percent
+    except (urllib.error.URLError, TimeoutError) as exc:
+        if destination.exists():
+            try:
+                destination.unlink()
+            except OSError:
+                pass
+        raise NetworkError(f"{NETWORK_ERROR_MESSAGE} ({exc})") from exc
+
+
+def _http_fetch_text(url: str) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            return response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise NetworkError(f"{NETWORK_ERROR_MESSAGE} ({exc})") from exc
+
+
+def find_latest_launcher_release() -> dict:
+    """Return the latest v* release with a WAPL-Launcher-v*.zip asset."""
+    url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/releases?per_page=30"
+    try:
+        payload = _http_get_json(url)
+    except NetworkError:
+        raise
+    if not isinstance(payload, list):
+        raise NetworkError(NETWORK_ERROR_MESSAGE)
+
+    candidates: list[tuple[datetime, dict]] = []
+    for release in payload:
+        if not isinstance(release, dict):
+            continue
+        if release.get("draft"):
+            continue
+        tag = release.get("tag_name")
+        if not isinstance(tag, str):
+            continue
+        if not tag.lower().startswith(LAUNCHER_TAG_PREFIX):
+            continue
+        if tag.lower().startswith(RUNTIME_TAG_PREFIX):
+            continue
+        published = release.get("published_at") or release.get("created_at")
+        timestamp = _parse_iso8601(published) or datetime.min
+        candidates.append((timestamp, release))
+
+    if not candidates:
+        raise NetworkError("업데이트할 런처 릴리스를 찾지 못했습니다.")
+
+    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    _, release = candidates[0]
+    assets = release.get("assets") or []
+    zip_asset = None
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = asset.get("name")
+        if isinstance(name, str) and LAUNCHER_ASSET_PATTERN.match(name):
+            zip_asset = asset
+            break
+    if zip_asset is None:
+        raise NetworkError("WAPL-Launcher-v*.zip 자산을 찾지 못했습니다.")
+
+    version = LAUNCHER_ASSET_PATTERN.match(zip_asset["name"]).group("version")
+    checksum_name = f"{zip_asset['name']}.sha256"
+    checksum_asset = next(
+        (
+            asset
+            for asset in assets
+            if isinstance(asset, dict) and asset.get("name") == checksum_name
+        ),
+        None,
+    )
+    if checksum_asset is None:
+        raise NetworkError(f"{checksum_name} 자산을 찾지 못했습니다.")
+
+    return {
+        "version": version,
+        "tag": release["tag_name"],
+        "zip_url": zip_asset["browser_download_url"],
+        "zip_name": zip_asset["name"],
+        "checksum_url": checksum_asset["browser_download_url"],
+    }
+
+
+def _parse_iso8601(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def verify_sha256(archive_path: Path, expected: str) -> None:
+    expected_digest = expected.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        raise NetworkError("체크섬 형식이 올바르지 않습니다.")
+    digest = hashlib.sha256()
+    with archive_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != expected_digest:
+        raise NetworkError(
+            f"SHA-256 검증 실패 (기대 {expected_digest}, 실제 {digest.hexdigest()})"
+        )
+
+
+def _safe_extract_zip(archive_path: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    absolute_destination = destination.resolve()
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            member_path = (destination / member.filename).resolve()
+            try:
+                member_path.relative_to(absolute_destination)
+            except ValueError as exc:
+                raise NetworkError("압축 파일에 잘못된 경로가 있습니다.") from exc
+            if member.is_dir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source, member_path.open("wb") as target:
+                shutil.copyfileobj(source, target)
+
+
+def download_launcher_payload(
+    destination_root: Path, on_progress: object | None = None
+) -> tuple[str, Path]:
+    """Download + verify + extract the latest launcher payload.
+
+    Returns the resolved version string and the staging directory used for
+    extraction. The caller is responsible for moving the staging files into
+    their final location.
+    """
+    release = find_latest_launcher_release()
+    staging = destination_root / f".staging-{release['version']}"
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    archive = staging / release["zip_name"]
+    _http_download_to_file(release["zip_url"], archive, on_progress)
+
+    checksum_text = _http_fetch_text(release["checksum_url"])
+    expected_digest: str | None = None
+    for token in re.findall(r"[0-9a-fA-F]{64}", checksum_text):
+        expected_digest = token.lower()
+        break
+    if not expected_digest:
+        archive.unlink(missing_ok=True)
+        raise NetworkError("체크섬 파일에서 해시 값을 읽지 못했습니다.")
+    try:
+        verify_sha256(archive, expected_digest)
+        _safe_extract_zip(archive, staging)
+    finally:
+        archive.unlink(missing_ok=True)
+    return release["version"], staging
+
+
+def copy_setup_to_bootstrapper_storage(source: Path | None = None) -> Path:
+    """Copy the running Setup.exe to the persistent bootstrapper storage."""
+    target = bootstrapper_storage_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    origin = source or Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
+    if not origin.is_file():
+        raise FileNotFoundError(f"Setup.exe 원본을 찾을 수 없습니다: {origin}")
+    if origin.resolve() == target.resolve():
+        return target
+    temp_target = target.with_suffix(target.suffix + ".new")
+    shutil.copy2(origin, temp_target)
+    os.replace(temp_target, target)
+    return target
+
+
+def wait_for_launcher_exit(timeout_seconds: float = 15.0) -> bool:
+    """Wait until no WebAppLauncher.exe processes remain."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not find_running_launcher_processes():
+            return True
+        time.sleep(0.25)
+    return not find_running_launcher_processes()
+
+
+def move_staging_into_install_dir(staging: Path, install_dir: Path) -> None:
+    """Move the contents of ``staging`` into ``install_dir``.
+
+    Callers are expected to have stopped the launcher (and any other process
+    that holds files inside ``install_dir`` open) before invoking this.
+    Stale files that are not part of the new payload are left untouched so
+    user-installed runtime bundles and shortcuts survive a launcher-only
+    update. The staging directory is removed when the move completes.
+    """
+    install_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        for entry in staging.iterdir():
+            target = install_dir / entry.name
+            if target.exists():
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target, ignore_errors=True)
+                else:
+                    target.unlink(missing_ok=True)
+            shutil.move(str(entry), str(target))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def is_installation_dir(path: Path) -> bool:
@@ -814,13 +1135,9 @@ class InstallerApp:
         if self.running:
             return
 
-        payload = bundled_path(PAYLOAD_DIR_NAME)
         if not destination.is_absolute():
             messagebox.showerror(PRODUCT_NAME, "설치 위치는 절대 경로여야 합니다.")
             self._show_page(1)
-            return
-        if not (payload / "WebAppLauncher.exe").is_file():
-            messagebox.showerror(PRODUCT_NAME, "설치 파일 묶음이 손상되었습니다.")
             return
 
         create_start_menu = self.start_menu.get()
@@ -830,13 +1147,14 @@ class InstallerApp:
         self.cancel_event.clear()
         self.log_messages.clear()
         self._reset_progress()
-        self.status.set("프로그램 파일을 복사하는 중...")
+        self.status.set("런처 페이로드를 다운로드하는 중...")
         self._show_page(3)
         self._write_log(f"설치 위치: {destination}")
+        self._write_log(f"Setup 버전: v{SETUP_VERSION}")
 
         threading.Thread(
             target=self._install_worker,
-            args=(payload, destination, create_start_menu, install_runtimes, register_associations),
+            args=(destination, create_start_menu, install_runtimes, register_associations),
             daemon=True,
         ).start()
 
@@ -971,7 +1289,6 @@ class InstallerApp:
 
     def _install_worker(
         self,
-        payload: Path,
         destination: Path,
         create_start_menu: bool,
         install_runtimes: bool,
@@ -980,28 +1297,90 @@ class InstallerApp:
         try:
             self._check_cancelled()
             destination.mkdir(parents=True, exist_ok=True)
-            self._copy_payload(payload, destination)
+
+            self.messages.put(("status", "GitHub Release에서 런처 페이로드를 받는 중..."))
+            self.messages.put(
+                (
+                    "progress",
+                    {"overall": 1.0, "phase": "download", "item": "런처 페이로드"},
+                )
+            )
+
+            def on_progress(current: int, total: int, percent: int) -> None:
+                self.messages.put(
+                    (
+                        "bootstrap_progress",
+                        {
+                            "type": "progress",
+                            "phase": "download",
+                            "item": "런처 페이로드",
+                            "current": current,
+                            "total": total,
+                            "overallPercent": max(1.0, percent * 0.6),
+                            "message": f"런처 다운로드 중 {percent}%",
+                        },
+                    )
+                )
+
+            with tempfile.TemporaryDirectory(prefix="wapl-setup-") as staging_dir_str:
+                staging_dir = Path(staging_dir_str)
+                version, staging = download_launcher_payload(staging_dir, on_progress)
+                self._check_cancelled()
+                self.messages.put(("log", f"런처 v{version} 다운로드와 검증이 끝났습니다."))
+                self._copy_payload(staging, destination)
+                self.messages.put(
+                    ("log", f"런처 v{version} 파일을 {destination}에 배치했습니다.")
+                )
 
             launcher = destination / "WebAppLauncher.exe"
             if create_start_menu:
                 self.messages.put(("status", "시작 메뉴 바로가기를 만드는 중..."))
-                self.messages.put(("progress", {"overall": 8.0, "phase": "shortcut", "item": "시작 메뉴"}))
+                self.messages.put(
+                    (
+                        "progress",
+                        {"overall": 70.0, "phase": "shortcut", "item": "시작 메뉴"},
+                    )
+                )
                 create_shortcut(start_menu_shortcut(), launcher, destination)
                 self.messages.put(("log", "시작 메뉴 바로가기를 만들었습니다."))
 
             if install_runtimes:
-                self.messages.put(("progress", {"overall": 10.0, "phase": "prepare", "item": "실행 환경"}))
+                self.messages.put(
+                    (
+                        "progress",
+                        {"overall": 75.0, "phase": "prepare", "item": "실행 환경"},
+                    )
+                )
                 self._run_bootstrapper(destination)
 
             self._check_cancelled()
-            write_install_state(destination)
+            self.messages.put(
+                (
+                    "status",
+                    "Setup.exe를 업데이트 디렉터리에 보관하는 중...",
+                )
+            )
+            setup_path = copy_setup_to_bootstrapper_storage()
+            self.messages.put(("log", f"업데이트용 Setup.exe: {setup_path}"))
+
+            self._check_cancelled()
+            write_install_state(destination, version=version, setup_path=setup_path)
+
             if register_associations:
                 self.messages.put(("status", ".wapk / .webapp 파일 연결을 등록하는 중..."))
                 if register_file_associations(destination):
                     self.messages.put(("log", ".wapk / .webapp 파일 연결을 등록했습니다."))
                 else:
-                    self.messages.put(("log", "파일 연결을 등록하지 못했습니다. (WebAppLauncher.exe 없음)"))
-            self.messages.put(("progress", {"overall": 100.0, "phase": "complete", "item": PRODUCT_NAME}))
+                    self.messages.put(
+                        ("log", "파일 연결을 등록하지 못했습니다. (WebAppLauncher.exe 없음)")
+                    )
+
+            self.messages.put(
+                (
+                    "progress",
+                    {"overall": 100.0, "phase": "complete", "item": PRODUCT_NAME},
+                )
+            )
             self.messages.put(("complete", launcher))
         except InstallCancelled:
             self.messages.put(("cancelled", None))
@@ -1398,7 +1777,251 @@ class InstallerApp:
         self.root.destroy()
 
 
+class UpdateDialog:
+    """Small progress dialog used when Setup.exe is launched in --update mode."""
+
+    def __init__(self, install_dir: Path) -> None:
+        self.install_dir = install_dir
+        self.root = tk.Tk()
+        self.root.title(f"{PRODUCT_NAME} 업데이트")
+        self.root.resizable(False, False)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.cancelled = False
+
+        self.status = tk.StringVar(value="업데이트를 준비하는 중...")
+        self.detail = tk.StringVar(value="-")
+        self.overall_percent = tk.DoubleVar(value=0)
+        self.overall_text = tk.StringVar(value="0%")
+
+        frame = tk.Frame(self.root, background="#ffffff", padx=24, pady=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(0, weight=1)
+
+        tk.Label(
+            frame,
+            text="WebApp Launcher 업데이트",
+            anchor=tk.W,
+            background="#ffffff",
+            foreground="#171719",
+            font=("Segoe UI Semibold", 13),
+        ).grid(row=0, column=0, sticky=tk.EW)
+
+        tk.Label(
+            frame,
+            textvariable=self.status,
+            anchor=tk.W,
+            background="#ffffff",
+            foreground="#4b4b4f",
+            font=("Segoe UI", 10),
+        ).grid(row=1, column=0, sticky=tk.EW, pady=(8, 0))
+
+        progress_row = tk.Frame(frame, background="#ffffff")
+        progress_row.grid(row=2, column=0, sticky=tk.EW, pady=(14, 0))
+        progress_row.columnconfigure(0, weight=1)
+        ttk.Progressbar(
+            progress_row,
+            mode="determinate",
+            maximum=100,
+            variable=self.overall_percent,
+        ).grid(row=0, column=0, sticky=tk.EW)
+        tk.Label(
+            progress_row,
+            textvariable=self.overall_text,
+            width=5,
+            anchor=tk.E,
+            background="#ffffff",
+            font=("Segoe UI Semibold", 10),
+        ).grid(row=0, column=1, padx=(10, 0))
+
+        tk.Label(
+            frame,
+            textvariable=self.detail,
+            anchor=tk.W,
+            background="#ffffff",
+            foreground="#6a6a6f",
+            font=("Segoe UI", 9),
+        ).grid(row=3, column=0, sticky=tk.EW, pady=(10, 0))
+
+        self.cancel_button = ttk.Button(frame, text="취소", command=self._on_close)
+        self.cancel_button.grid(row=4, column=0, sticky=tk.E, pady=(16, 0))
+
+        self.root.update_idletasks()
+        width = max(self.root.winfo_reqwidth(), 420)
+        height = max(self.root.winfo_reqheight(), 200)
+        x = max(0, (self.root.winfo_screenwidth() - width) // 2)
+        y = max(0, (self.root.winfo_screenheight() - height) // 2)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _on_close(self) -> None:
+        if self.cancelled:
+            return
+        self.cancelled = True
+        self.status.set("업데이트를 취소하는 중...")
+        self.cancel_button.configure(state=tk.DISABLED)
+
+    def report_overall(self, percent: float) -> None:
+        clamped = max(0.0, min(100.0, percent))
+        self.overall_percent.set(clamped)
+        self.overall_text.set(f"{clamped:.0f}%")
+
+    def report_status(self, message: str) -> None:
+        self.status.set(message)
+
+    def report_detail(self, message: str) -> None:
+        self.detail.set(message)
+
+    def pump(self) -> None:
+        try:
+            self.root.update()
+        except tk.TclError:
+            pass
+
+    def close(self) -> None:
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+
+def run_update_mode(install_dir: Path) -> int:
+    """Run the launcher update flow in --update mode."""
+    install_dir = install_dir.resolve()
+    if not is_installation_dir(install_dir):
+        print(f"error: {install_dir} 은(는) 설치된 WebApp Launcher 폴더가 아닙니다.", file=sys.stderr)
+        return 2
+
+    installed_version = upgrade_install_state_v1(install_dir) or SETUP_VERSION
+    print(f"설치된 런처 버전: v{installed_version}")
+
+    dialog = UpdateDialog(install_dir)
+    exit_code = 0
+    try:
+        dialog.report_status("GitHub Release에서 새 버전을 확인하는 중...")
+        dialog.report_overall(5)
+        dialog.pump()
+
+        release = find_latest_launcher_release()
+        new_version = release["version"]
+        print(f"최신 런처 버전: v{new_version}")
+        if new_version == installed_version and not _env_flag("--force"):
+            dialog.report_status(f"v{installed_version}은(는) 이미 최신 버전입니다.")
+            dialog.report_overall(100)
+            dialog.pump()
+            time.sleep(1.0)
+            return 0
+
+        dialog.report_detail(f"v{installed_version} → v{new_version}")
+        dialog.report_status("런처 실행을 정리하는 중...")
+        dialog.pump()
+        kill_running_launcher_processes()
+        if not wait_for_launcher_exit(timeout_seconds=10.0):
+            raise NetworkError("실행 중인 WebAppLauncher.exe가 종료되지 않았습니다.")
+
+        with tempfile.TemporaryDirectory(prefix="wapl-update-") as staging_dir_str:
+            staging_dir = Path(staging_dir_str)
+
+            def on_progress(current: int, total: int, percent: int) -> None:
+                dialog.report_status(f"런처 페이로드 다운로드 중 {percent}%")
+                dialog.report_overall(10 + percent * 0.6)
+                dialog.report_detail(f"{_format_bytes(current)} / {_format_bytes(total)}")
+                dialog.pump()
+
+            new_version, staging = download_launcher_payload(staging_dir, on_progress)
+            dialog.report_status("런처 파일을 교체하는 중...")
+            dialog.report_overall(75)
+            dialog.pump()
+            move_staging_into_install_dir(staging, install_dir)
+
+        dialog.report_status("Setup.exe를 보관하는 중...")
+        dialog.report_overall(85)
+        dialog.pump()
+        setup_path = copy_setup_to_bootstrapper_storage()
+
+        write_install_state(install_dir, version=new_version, setup_path=setup_path)
+        dialog.report_status("업데이트가 끝났습니다. 런처를 다시 시작합니다.")
+        dialog.report_detail(f"v{new_version} 설치 완료")
+        dialog.report_overall(100)
+        dialog.pump()
+        time.sleep(1.0)
+
+        launcher = install_dir / "WebAppLauncher.exe"
+        if launcher.is_file():
+            subprocess.Popen([str(launcher)], cwd=str(install_dir))
+    except NetworkError as exc:
+        messagebox.showerror(
+            PRODUCT_NAME,
+            f"업데이트에 실패했습니다.\n\n{exc}",
+        )
+        print(f"error: {exc}", file=sys.stderr)
+        exit_code = 3
+    except Exception as exc:
+        messagebox.showerror(PRODUCT_NAME, f"업데이트에 실패했습니다.\n\n{exc}")
+        print(f"error: {exc}", file=sys.stderr)
+        exit_code = 1
+    finally:
+        dialog.close()
+
+    return exit_code
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {"1", "true", "yes"}
+
+
+def _format_bytes(value: int) -> str:
+    size = float(max(0, value))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="WebAppLauncher-Setup")
+    parser.add_argument("--update", action="store_true", help="기존 설치 폴더를 새 버전으로 업데이트합니다.")
+    parser.add_argument(
+        "--install-dir",
+        type=Path,
+        help="업데이트 대상 설치 폴더 (--update와 함께 사용).",
+    )
+    parser.add_argument(
+        "--check-update",
+        action="store_true",
+        help="GitHub Release의 최신 런처 버전을 출력하고 종료합니다.",
+    )
+    parser.add_argument(
+        "--copy-self",
+        type=Path,
+        help="현재 Setup.exe를 지정한 경로로 복사하고 종료합니다 (디버그용).",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
+    args = parse_args(sys.argv[1:])
+
+    if args.copy_self is not None:
+        target = copy_setup_to_bootstrapper_storage(args.copy_self)
+        print(str(target))
+        return
+
+    if args.check_update:
+        try:
+            release = find_latest_launcher_release()
+        except NetworkError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(3)
+        print(f"{release['version']}\t{release['zip_url']}")
+        return
+
+    if args.update:
+        if args.install_dir is None:
+            print("error: --update에는 --install-dir 옵션이 필요합니다.", file=sys.stderr)
+            sys.exit(2)
+        exit_code = run_update_mode(args.install_dir)
+        sys.exit(exit_code)
+
     root = tk.Tk()
     try:
         root.iconbitmap(default=str(bundled_path("assets/installer.ico")))
