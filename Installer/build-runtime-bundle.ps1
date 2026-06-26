@@ -47,6 +47,19 @@ Set-Content -LiteralPath $stagedManifest -Value $updatedManifest -Encoding utf8
 if (-not (Test-Path -LiteralPath $LicensesDirectory)) {
     throw "Runtime license directory was not found: $LicensesDirectory"
 }
+
+foreach ($requiredLicenseGroup in @("WebAppLauncher", "Python", "Node.js", "Git", "pnpm", "uv")) {
+    $licenseGroupPath = Join-Path $LicensesDirectory $requiredLicenseGroup
+    if (-not (Test-Path -LiteralPath $licenseGroupPath)) {
+        throw "Runtime license directory is missing $requiredLicenseGroup notices."
+    }
+}
+
+$licenseFileCount = @(Get-ChildItem -LiteralPath $LicensesDirectory -Recurse -File).Count
+if ($licenseFileCount -lt 20) {
+    throw "Runtime license directory appears incomplete: only $licenseFileCount files found."
+}
+
 Copy-Item -LiteralPath $LicensesDirectory -Destination (Join-Path $stage "LICENSES") -Recurse -Force
 
 $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
