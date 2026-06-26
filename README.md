@@ -1,102 +1,88 @@
-# WebApp Launcher
+# WAPL (WebApp Launcher)
 
-Windows용 경량 웹앱 런처입니다. GitHub 저장소의 `.wapk` manifest를 읽어 WebView2 창에서 웹앱을 실행하고, Python/Node.js 런타임과 도구를 중앙에서 관리합니다.
+> GitHub 기반 로컬 웹앱 런처
 
-## 주요 기능
+WAPL(WebApp Launcher)은 **로컬 웹앱을 쉽고 일관되게 배포하고 실행하기 위한 플랫폼**입니다.
 
-- **GitHub 기반 앱 설치**: `owner@repo` 형식의 package id로 저장소를 클론해 웹앱을 설치합니다.
-- **통합 런타임 관리**: Python, Node.js, Git, uv, pnpm, WebView2를 별도 설치 없이 `.webapp` 아래에서 관리합니다.
-- **WebView2 기반 실행**: 앱은 HTML/JS 프론트엔드와 선택적 Python/Node 백엔드로 구성됩니다.
-- **창/프로세스 제어**: 커스텀 타이틀 바, 최소화/최대화/전체화면, 프로세스 관리자, 런타임 업데이트를 지원합니다.
+Python, Node.js 등의 런타임을 내장하고 있으며, 개발자는 GitHub 저장소만 공개하면 사용자는 복잡한 개발 환경 설치 없이 `.wapk` 설치 레시피를 통해 앱을 설치하고 실행할 수 있습니다.
 
-## 프로젝트 구조
+---
 
-```text
-WebAppLauncher/          WPF 데스크톱 앱 (WebView2 + HTML UI)
-WebAppLauncher.Core/     공유 로직 (설치, 실행, 런타임, 설정)
-WebAppLauncher.Cli/      명령줄 인터페이스
-WebAppLauncher.Bootstrapper/  런타임/도구 설치기
-WebAppLauncher.Tests/    xUnit 테스트
-Installer/               PyInstaller 기반 GUI 설치 프로그램
-APP_CONTRACT.md          `.wapk` manifest 및 Window API 규격
-```
+# 주요 기능
 
-## 빌드 방법
+* GitHub 기반 앱 설치
+* 내장 Python 및 Node.js 런타임
+* Git, uv, pnpm 기본 제공
+* `.wapk` 패키지 규격
+* 런타임 자동 관리
+* Local-first 설계
 
-### 요구 사항
+---
 
-- Windows 10/11
-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- Python 3 (인스톨러 빌드용)
+# 왜 WAPL을 만들었나요?
 
-### 솔루션 빌드
+물론 Python이나 Node.js로 만든 애플리케이션은 PyInstaller, Electron, Tauri 등의 도구를 이용하여 실행 파일(EXE)로 배포할 수 있습니다.
 
-```powershell
-dotnet build WebAppLauncher.slnx -c Release
-dotnet test WebAppLauncher.slnx -c Release
-```
+하지만 작은 로컬 웹앱을 개발하고 공유하는 과정에서는 다음과 같은 불편함이 있습니다.
 
-### 인스톨러 빌드
+* 수정할 때마다 다시 빌드해야 합니다.
+* 빌드 과정이 오래 걸릴 수 있습니다.
+* 테스트 중에도 매번 실행 파일을 다시 생성해야 합니다.
+* 앱마다 Python이나 Node.js 런타임이 중복 포함되어 용량이 커질 수 있습니다.
+* 간단한 도구를 공유하기에도 배포 과정이 번거롭습니다.
 
-```powershell
-Installer/build-installer.ps1 -Configuration Release -Runtime win-x64 -ProductVersion 0.1.0
-```
+WAPL은 이러한 불편함을 줄이기 위해 만들어졌습니다.
 
-빌드 결과는 `artifacts/` 폴터에 생성됩니다.
+런타임은 한 번만 설치하고, 앱은 `.wapk` 설치 레시피를 통해 GitHub 저장소에서 받아 실행합니다.
 
-## 사용 방법
+개발자는 빌드보다 개발에 집중할 수 있고, 사용자는 `.wapk` 파일 하나로 앱을 손쉽게 설치할 수 있습니다.
 
-### GUI 런처
+> WAPL은 EXE를 대체하기 위한 프로젝트가 아닙니다.
+> AI와 사람이 만든 작은 로컬 웹앱을 더 쉽게 배포하고 실행하기 위한 플랫폼입니다.
 
-```powershell
-artifacts/publish/WebAppLauncher/WebAppLauncher.exe
-```
+---
 
-### CLI
+# 기본 런타임
 
-```powershell
-WebAppLauncher.Cli/bin/Release/net10.0/WebAppLauncher.Cli.exe --help
-WebAppLauncher.Cli/bin/Release/net10.0/WebAppLauncher.Cli.exe install owner@repo
-WebAppLauncher.Cli/bin/Release/net10.0/WebAppLauncher.Cli.exe run owner@repo
-WebAppLauncher.Cli/bin/Release/net10.0/WebAppLauncher.Cli.exe doctor
-```
+### Python
 
-## `.wapk` manifest
+* Python 3.14
+* Python 3.13
 
-앱은 저장소 루트의 `webapp.wapk` 파일로 규격을 정의합니다. 자세한 내용은 [`APP_CONTRACT.md`](APP_CONTRACT.md)를 참조하세요.
+### Node.js
 
-```toml
-[wapk]
-format = 2
+* Node.js 24 (LTS)
+* Node.js 22 (LTS)
 
-[package]
-id = "owner@repository"
-name = "Example App"
+### 도구
 
-[source]
-provider = "github"
-owner = "owner"
-repo = "repository"
-branch = "main"
-commit = "*"
-app_dir = "."
+* Git
+* uv
+* pnpm
 
-[runtime]
-python = "python313"
-node = "none"
+---
 
-[entry]
-html = "app.html"
-python = "app.py"
-icon = "icon.png"
+# 보안
 
-[window]
-width = 1200
-height = 800
-resizable = true
-```
+WAPL은 다음과 같은 최소한의 검증을 수행합니다.
 
-## 라이선스
+* GitHub Public Repository만 허용
+* Commit Hash 형식 검증 및 Git `rev-parse` 검증
+* Runtime 업데이트 패키지 SHA256 검증
 
-WebApp Launcher는 [Apache License 2.0](LICENSE) 하에 배포됩니다.
-사용된 서드파티 라이브러리 및 런타임 정보는 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 참조하세요.
+커뮤니티 앱의 안전성을 보증하지는 않습니다.
+설치 전 GitHub 저장소를 직접 확인하는 것을 권장합니다.
+
+---
+
+# AI 개발 지원
+
+AI를 이용하여 WAPL 앱을 개발하는 경우 프로젝트 루트의 `AI_READ_THIS.md`를 먼저 읽어 주세요.
+
+해당 문서에는 WAPL 애플리케이션 구조와 개발 규칙이 정의되어 있습니다.
+
+---
+
+# 라이선스
+
+자세한 내용은 `LICENSE`를 참고하세요.
