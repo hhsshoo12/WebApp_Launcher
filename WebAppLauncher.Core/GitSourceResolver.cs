@@ -7,13 +7,19 @@ public sealed class GitSourceResolver
     private readonly ToolResolver tools;
     private readonly Func<SourceInfo, string> remoteUrl;
 
-    public GitSourceResolver(WebAppPaths paths, Func<SourceInfo, string>? remoteUrl = null)
+    public GitSourceResolver(
+        WebAppPaths paths,
+        Func<SourceInfo, string>? remoteUrl = null,
+        bool requirePublicRepository = true)
     {
         this.paths = paths;
         tools = new ToolResolver(paths);
         this.remoteUrl = remoteUrl ??
             (source => $"https://github.com/{source.Owner}/{source.Repo}.git");
+        RequirePublicRepository = requirePublicRepository;
     }
+
+    public bool RequirePublicRepository { get; }
 
     public async Task<ResolvedGitSource> ResolveAsync(
         SourceInfo source,
@@ -25,7 +31,10 @@ public sealed class GitSourceResolver
             throw new InvalidOperationException("Only GitHub sources are supported.");
         }
 
-        await EnsurePublicRepositoryAsync(source, cancellationToken);
+        if (RequirePublicRepository)
+        {
+            await EnsurePublicRepositoryAsync(source, cancellationToken);
+        }
 
         await GitLock.WaitAsync(cancellationToken);
         try

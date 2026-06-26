@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import json
 import os
 import queue
@@ -26,6 +27,17 @@ SIDEBAR_WIDTH = 150
 INSTALL_STATE_FILE = ".webapp-launcher-install.json"
 REGISTRY_KEY = r"Software\WebAppLauncher"
 REGISTRY_INSTALL_VALUE = "InstallLocation"
+ASSOC_CLASSES_ROOT = r"Software\Classes"
+ASSOC_WAPK_PROGID = "WebAppLauncher.Wapk"
+ASSOC_WEBAPP_PROGID = "WebAppLauncher.Webapp"
+ASSOC_DESCRIPTIONS = {
+    ASSOC_WAPK_PROGID: "WebAppLauncher 패키지",
+    ASSOC_WEBAPP_PROGID: "WebAppLauncher 앱",
+}
+ASSOC_EXTENSIONS = {
+    ".wapk": ASSOC_WAPK_PROGID,
+    ".webapp": ASSOC_WEBAPP_PROGID,
+}
 
 
 class InstallCancelled(Exception):
@@ -91,6 +103,82 @@ def clear_registered_install_dir() -> None:
     try:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY)
     except FileNotFoundError:
+        pass
+
+
+def _assoc_command(install_dir: Path) -> str:
+    launcher = install_dir / "WebAppLauncher.exe"
+    return f'"{launcher}" "%1"'
+
+
+def register_file_associations(install_dir: Path) -> bool:
+    if winreg is None:
+        return False
+    launcher = install_dir / "WebAppLauncher.exe"
+    if not launcher.is_file():
+        return False
+    command = _assoc_command(install_dir)
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, ASSOC_CLASSES_ROOT) as root:
+        for ext, progid in ASSOC_EXTENSIONS.items():
+            with winreg.CreateKey(root, ext) as ext_key:
+                winreg.SetValueEx(ext_key, "", 0, winreg.REG_SZ, progid)
+            with winreg.CreateKey(root, progid) as progid_key:
+                winreg.SetValueEx(
+                    progid_key, "", 0, winreg.REG_SZ, ASSOC_DESCRIPTIONS[progid]
+                )
+                with winreg.CreateKey(progid_key, r"shell\open\command") as cmd_key:
+                    winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, command)
+    _notify_shell_associations_changed()
+    return True
+
+
+def unregister_file_associations() -> None:
+    if winreg is None:
+        return
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            ASSOC_CLASSES_ROOT,
+            0,
+            winreg.KEY_ALL_ACCESS,
+        ) as root:
+            for progid in (ASSOC_WAPK_PROGID, ASSOC_WEBAPP_PROGID):
+                _delete_key_recursive(root, progid)
+            for ext in ASSOC_EXTENSIONS:
+                try:
+                    winreg.DeleteKey(root, ext)
+                except FileNotFoundError:
+                    pass
+    except FileNotFoundError:
+        pass
+    _notify_shell_associations_changed()
+
+
+def _delete_key_recursive(root, subkey_path: str) -> None:
+    try:
+        with winreg.OpenKey(root, subkey_path, 0, winreg.KEY_ALL_ACCESS) as key:
+            subkeys: list[str] = []
+            index = 0
+            while True:
+                try:
+                    subkeys.append(winreg.EnumKey(key, index))
+                except OSError:
+                    break
+                index += 1
+            for sub in subkeys:
+                _delete_key_recursive(key, sub)
+    except FileNotFoundError:
+        return
+    try:
+        winreg.DeleteKey(root, subkey_path)
+    except FileNotFoundError:
+        pass
+
+
+def _notify_shell_associations_changed() -> None:
+    try:
+        ctypes.windll.shell32.SHChangeNotify(0x08000000, 0x0000, 0, 0)
+    except Exception:
         pass
 
 
@@ -287,6 +375,7 @@ class InstallerApp:
         self.install_runtimes = tk.BooleanVar(value=True)
         self.start_menu = tk.BooleanVar(value=True)
         self.launch_after_install = tk.BooleanVar(value=True)
+        self.file_associations = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="설치를 준비하고 있습니다.")
         self.cleanup_option = tk.StringVar(value="keep")
 
@@ -544,6 +633,11 @@ class InstallerApp:
         ).pack(anchor=tk.W, pady=5)
         ttk.Checkbutton(
             options,
+            text=".wapk / .webapp 파일 연결 등록 (관리자 권한 불필요)",
+            variable=self.file_associations,
+        ).pack(anchor=tk.W, pady=5)
+        ttk.Checkbutton(
+            options,
             text="설치 완료 후 런처 실행",
             variable=self.launch_after_install,
         ).pack(anchor=tk.W, pady=5)
@@ -731,6 +825,7 @@ class InstallerApp:
 
         create_start_menu = self.start_menu.get()
         install_runtimes = self.install_runtimes.get()
+        register_associations = self.file_associations.get()
         self.running = True
         self.cancel_event.clear()
         self.log_messages.clear()
@@ -741,7 +836,7 @@ class InstallerApp:
 
         threading.Thread(
             target=self._install_worker,
-            args=(payload, destination, create_start_menu, install_runtimes),
+            args=(payload, destination, create_start_menu, install_runtimes, register_associations),
             daemon=True,
         ).start()
 
@@ -880,6 +975,7 @@ class InstallerApp:
         destination: Path,
         create_start_menu: bool,
         install_runtimes: bool,
+        register_associations: bool,
     ) -> None:
         try:
             self._check_cancelled()
@@ -899,6 +995,12 @@ class InstallerApp:
 
             self._check_cancelled()
             write_install_state(destination)
+            if register_associations:
+                self.messages.put(("status", ".wapk / .webapp 파일 연결을 등록하는 중..."))
+                if register_file_associations(destination):
+                    self.messages.put(("log", ".wapk / .webapp 파일 연결을 등록했습니다."))
+                else:
+                    self.messages.put(("log", "파일 연결을 등록하지 못했습니다. (WebAppLauncher.exe 없음)"))
             self.messages.put(("progress", {"overall": 100.0, "phase": "complete", "item": PRODUCT_NAME}))
             self.messages.put(("complete", launcher))
         except InstallCancelled:
@@ -922,6 +1024,8 @@ class InstallerApp:
                     )
                 )
 
+            self.messages.put(("status", "파일 연결을 해제하는 중..."))
+            unregister_file_associations()
             remove_installation(destination, report)
 
             cleanup = self.cleanup_option.get()

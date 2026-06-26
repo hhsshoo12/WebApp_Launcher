@@ -450,7 +450,7 @@ public sealed class ManifestTests
 
         var paths = new WebAppPaths(Path.Combine(temp.Path, "webapp-root"));
         paths.EnsureRootLayout();
-        var resolver = new GitSourceResolver(paths, _ => remote);
+        var resolver = new GitSourceResolver(paths, _ => remote, requirePublicRepository: false);
         var latest = await resolver.ResolveAsync(
             new SourceInfo("github", "owner", "repo", "*", "*", "."));
         var pinned = await resolver.ResolveAsync(
