@@ -2,13 +2,6 @@ using System.Text.Json;
 
 namespace WebAppLauncher.Core;
 
-public sealed record PreparedAppUpdate(
-    string PackageId,
-    string OldVersion,
-    string NewVersion,
-    string Commit,
-    string StagingDirectory);
-
 public sealed class AppUpdateManager
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -31,9 +24,9 @@ public sealed class AppUpdateManager
         InstalledApp app,
         CancellationToken cancellationToken = default)
     {
-        if (app.Manifest.Format != 2 || app.Manifest.Source is null)
+        if (app.Manifest.Source is null)
         {
-            return Status(app, null, "unsupported", "format 1 앱은 자동 업데이트를 지원하지 않습니다.");
+            return Status(app, null, "unsupported", "앱 소스 정보가 없습니다.");
         }
 
         if (app.Manifest.Source.Commit != "*")
@@ -62,9 +55,9 @@ public sealed class AppUpdateManager
         InstalledApp app,
         CancellationToken cancellationToken = default)
     {
-        if (app.Manifest.Format != 2 || app.Manifest.Source is null)
+        if (app.Manifest.Source is null)
         {
-            throw new InvalidOperationException("Only format 2 apps can be updated.");
+            throw new InvalidOperationException("App source metadata is required for updates.");
         }
 
         if (app.Manifest.Source.Commit != "*")

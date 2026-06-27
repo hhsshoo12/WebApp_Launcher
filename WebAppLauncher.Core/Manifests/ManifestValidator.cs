@@ -30,12 +30,12 @@ public static class ManifestValidator
 
     public static void Validate(WapkManifest manifest)
     {
-        if (manifest.Format is not (1 or 2))
+        if (manifest.Format != 2)
         {
-            throw new InvalidDataException("Unsupported .wapk format. Expected format = 1 or 2.");
+            throw new InvalidDataException("Unsupported .wapk format. Expected format = 2.");
         }
 
-        ValidatePackage(manifest.Package, requireVersion: manifest.Format == 1);
+        ValidatePackage(manifest.Package, requireVersion: false);
         if (!string.Equals(manifest.Source.Provider, "github", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Only GitHub sources are supported in v1.");
@@ -47,8 +47,8 @@ public static class ManifestValidator
         Require(manifest.Source.Commit, "source.commit");
         ValidateGitHubSegment(manifest.Source.Owner, "source.owner");
         ValidateGitHubSegment(manifest.Source.Repo, "source.repo");
-        ValidateBranch(manifest.Source.Branch, manifest.Format);
-        ValidateCommit(manifest.Source.Commit, manifest.Format);
+        ValidateBranch(manifest.Source.Branch);
+        ValidateCommit(manifest.Source.Commit);
         if (!manifest.Package.Id.Equals(
                 $"{manifest.Source.Owner}@{manifest.Source.Repo}",
                 StringComparison.OrdinalIgnoreCase))
@@ -57,7 +57,7 @@ public static class ManifestValidator
         }
 
         EnsureRelativePath(manifest.Source.AppDir, "source.app_dir");
-        ValidateRuntime(manifest.Runtime, allowLegacyPython312: false);
+        ValidateRuntime(manifest.Runtime);
         EnsureRelativePath(manifest.Entry.Html, "entry.html");
         EnsureOptionalRelativePath(manifest.Entry.Python, "entry.python");
         EnsureOptionalRelativePath(manifest.Entry.Node, "entry.node");
@@ -65,16 +65,16 @@ public static class ManifestValidator
         ValidateWindow(manifest.Window);
     }
 
-    public static void Validate(WebAppManifest manifest, bool allowLegacyPersistentStorage = false)
+    public static void Validate(WebAppManifest manifest)
     {
-        if (manifest.Format is not (1 or 2))
+        if (manifest.Format != 2)
         {
-            throw new InvalidDataException("Unsupported .webapp format. Expected format = 1 or 2.");
+            throw new InvalidDataException("Unsupported .webapp format. Expected format = 2.");
         }
 
         ValidatePackage(manifest.Package, requireVersion: true);
         Require(manifest.SourceCommit, "webapp.source_commit");
-        ValidateRuntime(manifest.Runtime, allowLegacyPython312: true);
+        ValidateRuntime(manifest.Runtime);
         EnsureRelativePath(manifest.Paths.Source, "paths.source");
         EnsureRelativePath(manifest.Paths.Data, "paths.data");
         EnsureRelativePath(manifest.Paths.Logs, "paths.logs");
@@ -87,10 +87,9 @@ public static class ManifestValidator
         }
 
         EnsureOptionalRelativePath(manifest.Entry.Server, "entry.server");
-        if (manifest.Network.Port != 0 &&
-            manifest.Network.Port is < PortManager.FirstPort or > PortManager.LastPort)
+        if (manifest.Network.Port != 0)
         {
-            throw new InvalidDataException("network.port must be 0 or in the legacy 52000..52999 range.");
+            throw new InvalidDataException("network.port must be 0.");
         }
 
         if (manifest.Network.Host != "127.0.0.1")
@@ -98,9 +97,7 @@ public static class ManifestValidator
             throw new InvalidDataException("network.host must be 127.0.0.1 in v1.");
         }
 
-        if (!manifest.Storage.BrowserProfile.Equals("ephemeral", StringComparison.OrdinalIgnoreCase) &&
-            !(allowLegacyPersistentStorage &&
-              manifest.Storage.BrowserProfile.Equals("persistent", StringComparison.OrdinalIgnoreCase)))
+        if (!manifest.Storage.BrowserProfile.Equals("ephemeral", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("storage.browser_profile must be ephemeral.");
         }
@@ -111,18 +108,15 @@ public static class ManifestValidator
         }
 
         ValidateWindow(manifest.Window);
-        if (manifest.Format == 2 && manifest.Source is null)
+        if (manifest.Source is null)
         {
-            throw new InvalidDataException("format 2 .webapp metadata requires a source section.");
+            throw new InvalidDataException(".webapp metadata requires a source section.");
         }
 
-        if (manifest.Source is not null)
-        {
-            ValidateGitHubSegment(manifest.Source.Owner, "source.owner");
-            ValidateGitHubSegment(manifest.Source.Repo, "source.repo");
-            ValidateBranch(manifest.Source.Branch, manifest.Format);
-            ValidateCommit(manifest.Source.Commit, manifest.Format);
-        }
+        ValidateGitHubSegment(manifest.Source.Owner, "source.owner");
+        ValidateGitHubSegment(manifest.Source.Repo, "source.repo");
+        ValidateBranch(manifest.Source.Branch);
+        ValidateCommit(manifest.Source.Commit);
     }
 
     private static void ValidatePackage(PackageInfo package, bool requireVersion)
@@ -147,12 +141,9 @@ public static class ManifestValidator
         }
     }
 
-    private static void ValidateRuntime(RuntimeInfo runtime, bool allowLegacyPython312)
+    private static void ValidateRuntime(RuntimeInfo runtime)
     {
-        var isLegacyPython312 =
-            allowLegacyPython312 &&
-            runtime.Python.Equals("python312", StringComparison.OrdinalIgnoreCase);
-        if (!PythonRuntimes.Contains(runtime.Python) && !isLegacyPython312)
+        if (!PythonRuntimes.Contains(runtime.Python))
         {
             throw new InvalidDataException("runtime.python must be one of none, python313, python314.");
         }
@@ -187,16 +178,11 @@ public static class ManifestValidator
         }
     }
 
-    private static void ValidateBranch(string value, int format)
+    private static void ValidateBranch(string value)
     {
         if (value == "*")
         {
-            if (format == 2)
-            {
-                return;
-            }
-
-            throw new InvalidDataException("source.branch wildcard requires .wapk format 2.");
+            return;
         }
 
         if (value.Length > 244 ||
@@ -212,16 +198,11 @@ public static class ManifestValidator
         }
     }
 
-    private static void ValidateCommit(string value, int format)
+    private static void ValidateCommit(string value)
     {
         if (value == "*")
         {
-            if (format == 2)
-            {
-                return;
-            }
-
-            throw new InvalidDataException("source.commit wildcard requires .wapk format 2.");
+            return;
         }
 
         if (!GitCommitPattern.IsMatch(value))

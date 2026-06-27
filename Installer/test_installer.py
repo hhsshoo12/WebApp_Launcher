@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -11,15 +11,23 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import installer  # noqa: E402
+from wapl_installer import release as installer_release  # noqa: E402
+from wapl_installer import runtime as installer_runtime  # noqa: E402
+from wapl_installer import state as installer_state  # noqa: E402
+from wapl_installer import system as installer_system  # noqa: E402
 
 
 def make_installation(root: Path, *, marker: bool = True, version: str | None = None) -> Path:
     destination = root / "WebAppLauncher"
     destination.mkdir()
     (destination / "WebAppLauncher.exe").write_bytes(b"launcher")
-    (destination / "WebAppLauncher.Bootstrapper.exe").write_bytes(b"bootstrapper")
     if marker:
-        state: dict[str, object] = {"format": installer.INSTALL_STATE_FORMAT, "product": installer.PRODUCT_NAME, "version": version or "0.1.0", "install_location": str(destination.resolve())}
+        state: dict[str, object] = {
+            "format": installer.INSTALL_STATE_FORMAT,
+            "product": installer.PRODUCT_NAME,
+            "version": version or "0.1.0",
+            "install_location": str(destination.resolve()),
+        }
         (destination / installer.INSTALL_STATE_FILE).write_text(
             json.dumps(state),
             encoding="utf-8",
@@ -28,9 +36,6 @@ def make_installation(root: Path, *, marker: bool = True, version: str | None = 
 
 
 class InstallerStateTests(unittest.TestCase):
-    def make_installation(self, root: Path, *, marker: bool = True, version: str | None = None) -> Path:
-        return make_installation(root, marker=marker, version=version)
-
     def test_is_installation_dir_rejects_unrelated_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -39,20 +44,17 @@ class InstallerStateTests(unittest.TestCase):
 
     def test_find_existing_installation_prefers_registered_location(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            destination = self.make_installation(Path(temp))
+            destination = make_installation(Path(temp))
             with (
-                patch.object(installer, "read_registered_install_dir", return_value=destination),
-                patch.object(installer, "default_install_dir", return_value=Path(temp) / "missing"),
+                patch.object(installer_system, "read_registered_install_dir", return_value=destination),
+                patch.object(installer_system, "default_install_dir", return_value=Path(temp) / "missing"),
             ):
-                self.assertEqual(
-                    installer.find_existing_installation(),
-                    destination.resolve(),
-                )
+                self.assertEqual(installer.find_existing_installation(), destination.resolve())
 
     def test_remove_installation_removes_program_files_not_webapp_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            destination = self.make_installation(root)
+            destination = make_installation(root)
             (destination / "nested").mkdir()
             (destination / "nested" / "file.txt").write_text("data", encoding="utf-8")
             user_data = root / ".webapp" / "app" / "sample"
@@ -63,8 +65,8 @@ class InstallerStateTests(unittest.TestCase):
             progress: list[tuple[int, int, str]] = []
 
             with (
-                patch.object(installer, "start_menu_shortcut", return_value=shortcut),
-                patch.object(installer, "clear_registered_install_dir") as clear_registry,
+                patch.object(installer_system, "start_menu_shortcut", return_value=shortcut),
+                patch.object(installer_system, "clear_registered_install_dir") as clear_registry,
             ):
                 installer.remove_installation(
                     destination,
@@ -90,24 +92,8 @@ class InstallerStateTests(unittest.TestCase):
             self.assertEqual(str(destination.resolve()), payload["install_location"])
             self.assertEqual(str(setup_path.resolve()), payload["setup_path"])
 
-    def test_upgrade_install_state_v1_records_default_version(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            destination = Path(temp) / "WebAppLauncher"
-            destination.mkdir()
-            (destination / installer.INSTALL_STATE_FILE).write_text(
-                json.dumps({"format": 1, "product": installer.PRODUCT_NAME, "install_location": str(destination)}),
-                encoding="utf-8",
-            )
-            version = installer.upgrade_install_state_v1(destination)
-            self.assertEqual(installer.SETUP_VERSION, version)
-            payload = json.loads((destination / installer.INSTALL_STATE_FILE).read_text(encoding="utf-8"))
-            self.assertEqual(installer.INSTALL_STATE_FORMAT, payload["format"])
-            self.assertEqual(installer.SETUP_VERSION, payload["version"])
-
 
 class FakeWinreg:
-    """Tiny in-memory stand-in for the winreg module used in tests."""
-
     HKEY_CURRENT_USER = "HKCU"
     REG_SZ = 1
     KEY_ALL_ACCESS = 0x000F003F
@@ -169,16 +155,12 @@ class FakeWinregKey:
 
 
 class FileAssociationTests(unittest.TestCase):
-    def make_installation(self, root: Path, *, marker: bool = True, version: str | None = None) -> Path:
-        return make_installation(root, marker=marker, version=version)
-
     def test_register_associations_writes_user_classes(self) -> None:
         fake = FakeWinreg()
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            destination = self.make_installation(root)
-            with patch.object(installer, "winreg", fake), \
-                 patch.object(installer, "_notify_shell_associations_changed") as notify:
+            destination = make_installation(Path(temp))
+            with patch.object(installer_state, "winreg", fake), \
+                 patch.object(installer_state, "_notify_shell_associations_changed") as notify:
                 result = installer.register_file_associations(destination)
         self.assertTrue(result)
         for ext, progid in installer.ASSOC_EXTENSIONS.items():
@@ -195,10 +177,9 @@ class FileAssociationTests(unittest.TestCase):
     def test_register_associations_skips_when_launcher_missing(self) -> None:
         fake = FakeWinreg()
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            destination = root / "WebAppLauncher"
+            destination = Path(temp) / "WebAppLauncher"
             destination.mkdir()
-            with patch.object(installer, "winreg", fake):
+            with patch.object(installer_state, "winreg", fake):
                 result = installer.register_file_associations(destination)
         self.assertFalse(result)
         self.assertEqual(fake.trees, {})
@@ -206,20 +187,15 @@ class FileAssociationTests(unittest.TestCase):
     def test_unregister_associations_removes_keys(self) -> None:
         fake = FakeWinreg()
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            destination = self.make_installation(root)
-            with patch.object(installer, "winreg", fake), \
-                 patch.object(installer, "_notify_shell_associations_changed"):
+            destination = make_installation(Path(temp))
+            with patch.object(installer_state, "winreg", fake), \
+                 patch.object(installer_state, "_notify_shell_associations_changed"):
                 installer.register_file_associations(destination)
                 installer.unregister_file_associations()
         for ext in installer.ASSOC_EXTENSIONS:
-            self.assertNotIn(
-                f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{ext}", fake.trees
-            )
+            self.assertNotIn(f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{ext}", fake.trees)
         for progid in (installer.ASSOC_WAPK_PROGID, installer.ASSOC_WEBAPP_PROGID):
-            self.assertNotIn(
-                f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{progid}", fake.trees
-            )
+            self.assertNotIn(f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{progid}", fake.trees)
 
 
 class OnlineInstallTests(unittest.TestCase):
@@ -234,7 +210,7 @@ class OnlineInstallTests(unittest.TestCase):
                 {"name": "WAPL-Runtime-v0.1.zip", "browser_download_url": "https://example/runtime-zip"},
             ],
         }
-        with patch.object(installer, "_http_get_json", return_value=[fake_release]):
+        with patch.object(installer_release, "_http_get_json", return_value=[fake_release]):
             release = installer.find_latest_launcher_release()
         self.assertEqual("0.2.0", release["version"])
         self.assertEqual("https://example/zip", release["zip_url"])
@@ -242,7 +218,7 @@ class OnlineInstallTests(unittest.TestCase):
 
     def test_find_latest_launcher_release_skips_runtime_and_drafts(self) -> None:
         with patch.object(
-            installer,
+            installer_release,
             "_http_get_json",
             return_value=[
                 {"tag_name": "runtime-v0.1", "draft": False, "published_at": "2026-06-30T00:00:00Z", "assets": []},
@@ -261,9 +237,24 @@ class OnlineInstallTests(unittest.TestCase):
             release = installer.find_latest_launcher_release()
         self.assertEqual("0.3.0", release["version"])
 
+    def test_find_latest_runtime_release_returns_runtime_asset(self) -> None:
+        fake_release = {
+            "tag_name": "runtime-v0.2",
+            "draft": False,
+            "published_at": "2026-06-26T10:00:00Z",
+            "assets": [
+                {"name": "WAPL-Runtime-v0.2.zip", "browser_download_url": "https://example/runtime.zip"},
+                {"name": "WAPL-Runtime-v0.2.zip.sha256", "browser_download_url": "https://example/runtime.sha256"},
+            ],
+        }
+        with patch.object(installer_release, "_http_get_json", return_value=[fake_release]):
+            release = installer.find_latest_runtime_release()
+        self.assertEqual("0.2", release["version"])
+        self.assertEqual("https://example/runtime.zip", release["zip_url"])
+
     def test_find_latest_launcher_release_raises_when_no_assets(self) -> None:
         with patch.object(
-            installer,
+            installer_release,
             "_http_get_json",
             return_value=[{"tag_name": "v0.1.0", "draft": False, "published_at": "2026-06-26T00:00:00Z", "assets": []}],
         ):
@@ -271,7 +262,6 @@ class OnlineInstallTests(unittest.TestCase):
                 installer.find_latest_launcher_release()
 
     def test_verify_sha256_accepts_matching_digest(self) -> None:
-        import hashlib
         with tempfile.TemporaryDirectory() as temp:
             archive = Path(temp) / "payload.zip"
             archive.write_bytes(b"hello launcher")
@@ -292,13 +282,12 @@ class OnlineInstallTests(unittest.TestCase):
             payload_zip = Path(temp) / "WAPL-Launcher-v9.9.9.zip"
             with zipfile.ZipFile(payload_zip, "w") as archive:
                 archive.writestr("WebAppLauncher.exe", b"launcher-bytes")
-                archive.writestr("runtime-catalog.toml", b"[bundle.runtime]\n")
-            expected = "1111111111111111111111111111111111111111111111111111111111111111"
-            real_hash = __import__("hashlib").sha256(payload_zip.read_bytes()).hexdigest()
+                archive.writestr("Ui/index.html", b"ui")
+            real_hash = hashlib.sha256(payload_zip.read_bytes()).hexdigest()
 
             with (
                 patch.object(
-                    installer,
+                    installer_release,
                     "find_latest_launcher_release",
                     return_value={
                         "version": "9.9.9",
@@ -309,11 +298,11 @@ class OnlineInstallTests(unittest.TestCase):
                     },
                 ),
                 patch.object(
-                    installer,
+                    installer_release,
                     "_http_download_to_file",
-                    side_effect=lambda url, dest, on_progress=None: dest.write_bytes(payload_zip.read_bytes()),
+                    side_effect=lambda _url, dest, _on_progress=None: dest.write_bytes(payload_zip.read_bytes()),
                 ),
-                patch.object(installer, "_http_fetch_text", return_value=f"{real_hash}  {payload_zip.name}"),
+                patch.object(installer_release, "_http_fetch_text", return_value=f"{real_hash}  {payload_zip.name}"),
             ):
                 version, staging = installer.download_launcher_payload(staging_root)
 
@@ -321,7 +310,45 @@ class OnlineInstallTests(unittest.TestCase):
             self.assertTrue((staging / "WebAppLauncher.exe").is_file())
             self.assertEqual(b"launcher-bytes", (staging / "WebAppLauncher.exe").read_bytes())
             self.assertFalse((staging / payload_zip.name).exists())
-            self.assertNotEqual(expected, real_hash)
+
+    def test_download_runtime_bundle_verifies_and_extracts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            staging_root = Path(temp) / "staging"
+            staging_root.mkdir()
+            bundle_zip = Path(temp) / "WAPL-Runtime-v0.2.zip"
+            with zipfile.ZipFile(bundle_zip, "w") as archive:
+                archive.writestr("runtime/python313/python.exe", b"python")
+                archive.writestr("tools/git/git.exe", b"git")
+                archive.writestr("LICENSES/NOTICE.txt", b"licenses")
+                archive.writestr("runtime-manifest.toml", b"[runtime]\nbundle_version = \"0.2\"\n")
+            real_hash = hashlib.sha256(bundle_zip.read_bytes()).hexdigest()
+
+            with (
+                patch.object(
+                    installer_release,
+                    "find_latest_runtime_release",
+                    return_value={
+                        "version": "0.2",
+                        "tag": "runtime-v0.2",
+                        "zip_url": "https://example/runtime.zip",
+                        "zip_name": bundle_zip.name,
+                        "checksum_url": "https://example/runtime.sha256",
+                    },
+                ),
+                patch.object(
+                    installer_release,
+                    "_http_download_to_file",
+                    side_effect=lambda _url, dest, _on_progress=None: dest.write_bytes(bundle_zip.read_bytes()),
+                ),
+                patch.object(installer_release, "_http_fetch_text", return_value=f"{real_hash}  {bundle_zip.name}"),
+            ):
+                version, staging = installer.download_runtime_bundle(staging_root)
+
+            self.assertEqual("0.2", version)
+            self.assertTrue((staging / "runtime").is_dir())
+            self.assertTrue((staging / "tools").is_dir())
+            self.assertTrue((staging / "LICENSES").is_dir())
+            self.assertTrue((staging / "runtime-manifest.toml").is_file())
 
     def test_download_launcher_payload_rejects_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -332,7 +359,7 @@ class OnlineInstallTests(unittest.TestCase):
 
             with (
                 patch.object(
-                    installer,
+                    installer_release,
                     "find_latest_launcher_release",
                     return_value={
                         "version": "0.0.1",
@@ -343,21 +370,46 @@ class OnlineInstallTests(unittest.TestCase):
                     },
                 ),
                 patch.object(
-                    installer,
+                    installer_release,
                     "_http_download_to_file",
-                    side_effect=lambda url, dest, on_progress=None: dest.write_bytes(payload_zip.read_bytes()),
+                    side_effect=lambda _url, dest, _on_progress=None: dest.write_bytes(payload_zip.read_bytes()),
                 ),
-                patch.object(installer, "_http_fetch_text", return_value="0" * 64),
+                patch.object(installer_release, "_http_fetch_text", return_value="0" * 64),
             ):
                 with self.assertRaises(installer.NetworkError):
                     installer.download_launcher_payload(staging_root)
+
+    def test_install_runtime_bundle_replaces_runtime_tools_and_licenses(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".webapp"
+            staging = Path(temp) / "staging"
+            (staging / "runtime").mkdir(parents=True)
+            (staging / "tools").mkdir()
+            (staging / "LICENSES").mkdir()
+            (staging / "runtime" / "python.txt").write_text("new", encoding="utf-8")
+            (staging / "tools" / "git.txt").write_text("new", encoding="utf-8")
+            (staging / "LICENSES" / "NOTICE.txt").write_text("new", encoding="utf-8")
+            (staging / "runtime-manifest.toml").write_text("[runtime]\n", encoding="utf-8")
+            (root / "runtime").mkdir(parents=True)
+            (root / "runtime" / "old.txt").write_text("old", encoding="utf-8")
+
+            installer_runtime.install_runtime_bundle(staging, root)
+
+            self.assertFalse(staging.exists())
+            self.assertFalse((root / "runtime" / "old.txt").exists())
+            self.assertEqual("new", (root / "runtime" / "python.txt").read_text(encoding="utf-8"))
+            self.assertTrue((root / "runtime-manifest.toml").is_file())
 
     def test_copy_setup_to_bootstrapper_storage_writes_expected_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             source = home / "Source-Setup.exe"
             source.write_bytes(b"setup-content")
-            with patch.object(installer, "BOOTSTRAPPER_STORAGE_DIR", home / ".wapk" / "bootstrapper"):
+            with patch.object(
+                installer_system,
+                "bootstrapper_storage_path",
+                return_value=home / ".wapk" / "bootstrapper" / "WebAppLauncher-Setup.exe",
+            ):
                 target = installer.copy_setup_to_bootstrapper_storage(source)
             self.assertTrue(target.is_file())
             self.assertEqual("WebAppLauncher-Setup.exe", target.name)
@@ -371,132 +423,12 @@ class MoveStagingTests(unittest.TestCase):
             install = Path(temp) / "install"
             staging.mkdir()
             (staging / "WebAppLauncher.exe").write_bytes(b"new")
-            (staging / "runtime-catalog.toml").write_text("ok", encoding="utf-8")
+            (staging / "Ui").mkdir()
+            (staging / "Ui" / "index.html").write_text("ok", encoding="utf-8")
             installer.move_staging_into_install_dir(staging, install)
             self.assertTrue((install / "WebAppLauncher.exe").is_file())
-            self.assertEqual("ok", (install / "runtime-catalog.toml").read_text(encoding="utf-8"))
+            self.assertEqual("ok", (install / "Ui" / "index.html").read_text(encoding="utf-8"))
             self.assertFalse(staging.exists())
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-class FakeWinreg:
-    """Tiny in-memory stand-in for the winreg module used in tests."""
-
-    HKEY_CURRENT_USER = "HKCU"
-    REG_SZ = 1
-    KEY_ALL_ACCESS = 0x000F003F
-
-    def __init__(self) -> None:
-        self.trees: dict[str, dict[str, object]] = {}
-
-    def _resolve(self, parent, name: str) -> str:
-        if isinstance(parent, FakeWinregKey):
-            return f"{parent.path}\\{name}"
-        return f"{parent}\\{name}"
-
-    def CreateKey(self, parent, name: str) -> "FakeWinregKey":
-        path = self._resolve(parent, name)
-        self.trees.setdefault(path, {})
-        return FakeWinregKey(self, path)
-
-    def OpenKey(self, parent, name: str, *_args, **_kwargs) -> "FakeWinregKey":
-        path = self._resolve(parent, name)
-        if path not in self.trees:
-            raise FileNotFoundError(path)
-        return FakeWinregKey(self, path)
-
-    def DeleteKey(self, parent, name: str) -> None:
-        path = self._resolve(parent, name)
-        if path in self.trees:
-            del self.trees[path]
-
-    def SetValueEx(self, key: "FakeWinregKey", value_name: str, _reserved, _type, value: object) -> None:
-        key.values[value_name] = value
-        self.trees[key.path] = key.values
-
-    def QueryValueEx(self, key: "FakeWinregKey", value_name: str) -> tuple[object, int]:
-        return (key.values[value_name], 0)
-
-    def EnumKey(self, key: "FakeWinregKey", index: int) -> str:
-        prefix = key.path + "\\"
-        children = sorted(
-            name[len(prefix):].split("\\", 1)[0]
-            for name in self.trees
-            if name.startswith(prefix)
-        )
-        if index >= len(children):
-            raise OSError("no more keys")
-        return children[index]
-
-
-class FakeWinregKey:
-    def __init__(self, owner: FakeWinreg, path: str) -> None:
-        self.owner = owner
-        self.path = path
-        self.values: dict[str, object] = {}
-
-    def __enter__(self) -> "FakeWinregKey":
-        return self
-
-    def __exit__(self, *_args) -> None:
-        pass
-
-
-class FileAssociationTests(unittest.TestCase):
-    def make_installation(self, root: Path, *, marker: bool = True) -> Path:
-        return make_installation(root, marker=marker)
-
-    def test_register_associations_writes_user_classes(self) -> None:
-        fake = FakeWinreg()
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            destination = self.make_installation(root)
-            with patch.object(installer, "winreg", fake), \
-                 patch.object(installer, "_notify_shell_associations_changed") as notify:
-                result = installer.register_file_associations(destination)
-        self.assertTrue(result)
-        for ext, progid in installer.ASSOC_EXTENSIONS.items():
-            ext_key = fake.trees[f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{ext}"]
-            self.assertEqual(ext_key[""], progid)
-            progid_key = fake.trees[f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{progid}"]
-            self.assertEqual(progid_key[""], installer.ASSOC_DESCRIPTIONS[progid])
-            cmd_key = fake.trees[
-                f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{progid}\\shell\\open\\command"
-            ]
-            self.assertEqual(cmd_key[""], f'"{destination}\\WebAppLauncher.exe" "%1"')
-        notify.assert_called_once_with()
-
-    def test_register_associations_skips_when_launcher_missing(self) -> None:
-        fake = FakeWinreg()
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            destination = root / "WebAppLauncher"
-            destination.mkdir()
-            with patch.object(installer, "winreg", fake):
-                result = installer.register_file_associations(destination)
-        self.assertFalse(result)
-        self.assertEqual(fake.trees, {})
-
-    def test_unregister_associations_removes_keys(self) -> None:
-        fake = FakeWinreg()
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            destination = self.make_installation(root)
-            with patch.object(installer, "winreg", fake), \
-                 patch.object(installer, "_notify_shell_associations_changed"):
-                installer.register_file_associations(destination)
-                installer.unregister_file_associations()
-        for ext in installer.ASSOC_EXTENSIONS:
-            self.assertNotIn(
-                f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{ext}", fake.trees
-            )
-        for progid in (installer.ASSOC_WAPK_PROGID, installer.ASSOC_WEBAPP_PROGID):
-            self.assertNotIn(
-                f"HKCU\\{installer.ASSOC_CLASSES_ROOT}\\{progid}", fake.trees
-            )
 
 
 if __name__ == "__main__":

@@ -12,7 +12,6 @@ const state = {
   processes: [],
   processPorts: { occupied: 0, total: 1000, percent: 0, values: [] },
   appUpdates: [],
-  runtimeBundle: null,
   launcherVersion: "",
   launcherUpdate: null
 };
@@ -246,7 +245,6 @@ function openSettings() {
   post({ type: "licenses" });
   post({ type: "doctor" });
   post({ type: "appUpdateState" });
-  post({ type: "runtimeReleaseState" });
   post({ type: "checkLauncherUpdate" });
 }
 
@@ -291,37 +289,6 @@ function renderAppUpdates(items = state.appUpdates) {
     </div>`).join("");
 }
 
-function renderRuntimeBundle(bundle) {
-  state.runtimeBundle = bundle;
-  const root = $("#runtime-release");
-  const text = root.querySelector("small");
-  const download = root.querySelector("[data-runtime-download]");
-  const apply = root.querySelector("[data-runtime-apply]");
-  download.hidden = true;
-  apply.hidden = true;
-  if (!bundle) {
-    text.textContent = "아직 새 번들을 확인하지 않았습니다.";
-    return;
-  }
-  if (bundle.status === "checking") {
-    text.textContent = bundle.message || "새 번들을 확인하는 중입니다.";
-    return;
-  }
-  if (bundle.status === "error") {
-    text.textContent = bundle.message || "런타임 번들을 확인하지 못했습니다.";
-  } else if (bundle.status === "no_release") {
-    text.textContent = "아직 공개된 런타임 번들이 없습니다.";
-  } else if (bundle.status === "current") {
-    text.textContent = `v${bundle.installedVersion} · 최신 상태`;
-  } else if (bundle.status === "downloaded") {
-    text.textContent = `v${bundle.version} 다운로드 완료`;
-    apply.hidden = false;
-  } else {
-    text.textContent = `설치 ${bundle.installedVersion || "없음"} → 최신 v${bundle.version}`;
-    download.hidden = false;
-  }
-}
-
 function renderDoctor() {
   const container = $("#doctor-results");
   const items = state.doctorItems;
@@ -357,7 +324,12 @@ function renderLauncherUpdate() {
   const detail = root.querySelector("#launcher-update-detail");
   const checkButton = root.querySelector("[data-launcher-check]");
   const updateButton = root.querySelector("[data-launcher-update]");
-  if (updateButton) updateButton.hidden = true;
+  if (updateButton) {
+    updateButton.hidden = true;
+    updateButton.classList.remove("is-latest");
+    updateButton.disabled = false;
+    updateButton.textContent = "업데이트";
+  }
   if (!state.launcherVersion) {
     detail.textContent = "런처 버전 정보를 불러오는 중입니다.";
     return;
@@ -385,6 +357,12 @@ function renderLauncherUpdate() {
   }
   if (update.status === "current") {
     detail.textContent = `설치 v${update.installedVersion} · 최신 상태`;
+    if (updateButton) {
+      updateButton.hidden = false;
+      updateButton.textContent = "최신";
+      updateButton.classList.add("is-latest");
+      updateButton.disabled = true;
+    }
     return;
   }
   detail.textContent = `설치 v${update.installedVersion} → 최신 v${update.latestVersion}`;
@@ -480,7 +458,7 @@ settingsBackdrop.addEventListener("click", (event) => {
 
   if (event.target.closest("[data-runtime-check]")) {
     $("#runtime-results").innerHTML = '<div class="settings-empty">버전을 확인하는 중입니다.</div>';
-    post({ type: "checkRuntimeUpdates" });
+    post({ type: "checkRuntimeStatus" });
     return;
   }
 
@@ -504,22 +482,6 @@ settingsBackdrop.addEventListener("click", (event) => {
       version: appUpdateButton.dataset.version
     });
     setBusy(true, "앱 업데이트를 준비하는 중입니다.");
-    return;
-  }
-
-  if (event.target.closest("[data-runtime-release-check]")) {
-    renderRuntimeBundle({ status: "checking", message: "새 번들을 확인하는 중입니다." });
-    post({ type: "checkRuntimeRelease" });
-    return;
-  }
-
-  if (event.target.closest("[data-runtime-download]")) {
-    post({ type: "downloadRuntimeUpdate" });
-    return;
-  }
-
-  if (event.target.closest("[data-runtime-apply]")) {
-    post({ type: "applyRuntimeUpdate" });
     return;
   }
 
@@ -603,15 +565,6 @@ if (host) {
         $("#app-update-last-check").textContent =
           `마지막 확인: ${new Date(data.lastChecked).toLocaleString()}`;
       }
-    }
-    if (data.type === "runtimeRelease" && data.status === "complete") {
-      renderRuntimeBundle(data.bundle);
-    }
-    if (data.type === "runtimeDownload") {
-      const progress = $("#runtime-download-progress");
-      progress.hidden = false;
-      progress.querySelector("i").style.width = `${Math.min(100, data.percent)}%`;
-      progress.querySelector("span").textContent = `${Math.round(data.percent)}%`;
     }
     if (data.type === "launcherUpdate" && data.status === "complete") {
       state.launcherUpdate = data.update;

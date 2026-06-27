@@ -1,8 +1,7 @@
 """WebApp Launcher version metadata.
 
-The build script (build-installer.ps1) writes the resolved version string
-into this file before PyInstaller bundles installer.py, so the installer
-records the same version it was built as.
+The build script writes a generated version.py into the PyInstaller staging
+directory, so this source file remains a local development default.
 """
 
 from __future__ import annotations

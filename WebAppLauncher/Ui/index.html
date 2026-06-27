@@ -180,7 +180,7 @@
                 <button type="button" class="secondary-button" data-launcher-check>새 버전 확인</button>
               </div>
             </div>
-            <p class="settings-description">설치된 런처는 GitHub Release에서 직접 새 버전을 받아 교체합니다. 업데이트는 저장된 Setup.exe가 처리하며, 런처는 새 버전으로 자동 재시작됩니다.</p>
+            <p class="settings-description">런처는 새 버전 확인 후 저장된 Setup.exe를 실행합니다. 다운로드, 검증, 교체, 재실행은 설치 관리자가 처리합니다.</p>
             <div id="launcher-update" class="update-banner">
               <div>
                 <strong>현재 버전</strong>
@@ -213,23 +213,12 @@
 
           <section class="settings-panel" data-settings-panel="runtime">
             <div class="settings-panel-heading">
-              <div><p class="settings-kicker">BUNDLED TOOLCHAIN</p><h3>런타임 업데이트 체크</h3></div>
+              <div><p class="settings-kicker">BUNDLED TOOLCHAIN</p><h3>런타임 설치 상태</h3></div>
               <div class="settings-actions">
-                <button type="button" class="secondary-button" data-runtime-release-check>새 번들 확인</button>
                 <button type="button" class="secondary-button" data-runtime-check>설치 상태 확인</button>
               </div>
             </div>
-            <p class="settings-description">GitHub Releases의 통합 런타임 번들을 확인하고 재시작 시 안전하게 교체합니다.</p>
-            <div id="runtime-release" class="update-banner">
-              <div><strong>런타임 번들</strong><small>아직 새 번들을 확인하지 않았습니다.</small></div>
-              <div class="settings-actions">
-                <button type="button" class="secondary-button" data-runtime-download hidden>다운로드</button>
-                <button type="button" class="primary-button" data-runtime-apply hidden>재시작 후 적용</button>
-              </div>
-            </div>
-            <div id="runtime-download-progress" class="download-progress" hidden>
-              <i></i><span>0%</span>
-            </div>
+            <p class="settings-description">런타임 설치와 교체는 Setup.exe가 담당합니다. 여기서는 현재 설치된 도구의 상태만 확인합니다.</p>
             <div id="runtime-results" class="runtime-results">
               <div class="settings-empty">아직 버전을 확인하지 않았습니다.</div>
             </div>

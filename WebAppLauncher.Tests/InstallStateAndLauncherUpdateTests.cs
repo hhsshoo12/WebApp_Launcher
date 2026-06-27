@@ -62,6 +62,59 @@ public sealed class InstallStateStoreTests
         Assert.True(File.Exists(path));
         Assert.False(File.Exists(path + ".tmp"));
     }
+
+    [Fact]
+    public void SaveEmitsSnakeCaseKeysMatchingPythonInstaller()
+    {
+        using var temp = new TempDirectory();
+        var path = System.IO.Path.Combine(temp.Path, InstallState.FileName);
+        var store = new InstallStateStore(path);
+        var expected = new InstallState(
+            InstallState.CurrentFormat,
+            "WebApp Launcher",
+            "0.1.0",
+            temp.Path,
+            System.IO.Path.Combine(temp.Path, "WebAppLauncher-Setup.exe"));
+
+        store.Save(expected);
+
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var root = document.RootElement;
+        Assert.Equal(2, root.GetProperty("format").GetInt32());
+        Assert.Equal("WebApp Launcher", root.GetProperty("product").GetString());
+        Assert.Equal("0.1.0", root.GetProperty("version").GetString());
+        Assert.Equal(temp.Path, root.GetProperty("install_location").GetString());
+        Assert.Equal(
+            System.IO.Path.Combine(temp.Path, "WebAppLauncher-Setup.exe"),
+            root.GetProperty("setup_path").GetString());
+    }
+
+    [Fact]
+    public void LoadReadsSnakeCaseKeysWrittenByPythonInstaller()
+    {
+        using var temp = new TempDirectory();
+        var path = System.IO.Path.Combine(temp.Path, InstallState.FileName);
+        File.WriteAllText(path, """
+            {
+              "format": 2,
+              "product": "WebApp Launcher",
+              "version": "0.1.0",
+              "install_location": "C:\\Program Files\\WebAppLauncher",
+              "setup_path": "C:\\Users\\me\\.wapk\\bootstrapper\\WebAppLauncher-Setup.exe"
+            }
+            """);
+        var store = new InstallStateStore(path);
+
+        var state = store.Load();
+
+        Assert.NotNull(state);
+        Assert.Equal(2, state!.Format);
+        Assert.Equal("0.1.0", state.Version);
+        Assert.Equal("C:\\Program Files\\WebAppLauncher", state.InstallLocation);
+        Assert.Equal(
+            "C:\\Users\\me\\.wapk\\bootstrapper\\WebAppLauncher-Setup.exe",
+            state.SetupPath);
+    }
 }
 
 public sealed class LauncherUpdateManagerTests

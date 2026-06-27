@@ -6,5 +6,6 @@ obj/
 TestResults/
 artifacts/
 Installer/.venv/
+Installer/pyinstallerWork/
 __pycache__/
 *.py[cod]

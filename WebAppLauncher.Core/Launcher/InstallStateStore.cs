@@ -1,13 +1,14 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace WebAppLauncher.Core;
 
 public sealed record InstallState(
-    int Format,
-    string Product,
-    string Version,
-    string InstallLocation,
-    string? SetupPath = null)
+    [property: JsonPropertyName("format")] int Format,
+    [property: JsonPropertyName("product")] string Product,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("install_location")] string InstallLocation,
+    [property: JsonPropertyName("setup_path")] string? SetupPath = null)
 {
     public const int CurrentFormat = 2;
     public const string FileName = ".webapp-launcher-install.json";
@@ -42,21 +43,18 @@ public sealed class InstallStateStore
         try
         {
             using var stream = File.OpenRead(Path);
-            return JsonSerializer.Deserialize<InstallState>(stream, JsonOptions);
+            var state = JsonSerializer.Deserialize<InstallState>(stream, JsonOptions);
+            return state is not null &&
+                   state.Format == InstallState.CurrentFormat &&
+                   !string.IsNullOrWhiteSpace(state.Version) &&
+                   !string.IsNullOrWhiteSpace(state.InstallLocation)
+                ? state
+                : null;
         }
         catch (JsonException)
         {
             return null;
         }
-    }
-
-    public InstallState LoadOrDefault(string defaultVersion)
-    {
-        return Load() ?? new InstallState(
-            InstallState.CurrentFormat,
-            "WebApp Launcher",
-            defaultVersion,
-            System.IO.Path.GetDirectoryName(Path) ?? string.Empty);
     }
 
     public void Save(InstallState state)

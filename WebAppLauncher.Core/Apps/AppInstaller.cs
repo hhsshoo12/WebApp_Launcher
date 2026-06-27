@@ -20,7 +20,7 @@ public sealed class AppInstaller
         paths.EnsureRootLayout();
         var wapk = TomlManifestStore.LoadWapk(wapkPath);
         var resolved = await git.ResolveAsync(wapk.Source, cancellationToken: cancellationToken);
-        var version = wapk.Format == 2 ? resolved.Commit[..8] : wapk.Package.Version;
+        var version = resolved.Commit[..8];
         var installDirectory = paths.GetAppDirectory(wapk.Package.Id, version);
         return await InstallResolvedAsync(
             wapk,
@@ -70,12 +70,12 @@ public sealed class AppInstaller
             var server = ResolveServer(wapk, sourceDirectory);
             var package = wapk.Package with
             {
-                Version = wapk.Format == 2 ? resolved.Commit[..8] : wapk.Package.Version
+                Version = resolved.Commit[..8]
             };
             var manifestName = $"{GetRepoName(wapk.Package.Id)}.webapp";
             var manifestPath = Path.Combine(installDirectory, manifestName);
             var manifest = new WebAppManifest(
-                wapk.Format == 2 ? 2 : 1,
+                2,
                 DateTimeOffset.UtcNow,
                 resolved.Commit,
                 package,
@@ -85,7 +85,7 @@ public sealed class AppInstaller
                 new NetworkInfo("127.0.0.1", 0, "dynamic"),
                 new StorageInfo("ephemeral", false, false),
                 wapk.Window,
-                wapk.Format == 2 ? wapk.Source : null);
+                wapk.Source);
 
             TomlManifestStore.SaveWebApp(manifestPath, manifest);
             var app = new InstalledApp(manifest, installDirectory, manifestPath);

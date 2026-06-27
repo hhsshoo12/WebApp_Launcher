@@ -1,8 +1,10 @@
 using WebAppLauncher.Core;
 using Xunit;
+using System.Runtime.Versioning;
 
 namespace WebAppLauncher.Tests;
 
+[SupportedOSPlatform("windows")]
 public sealed class AppShortcutServiceTests
 {
     [Fact]
@@ -20,7 +22,7 @@ public sealed class AppShortcutServiceTests
         var sourceDir = Path.Combine(installTemp.Path, "source");
         Directory.CreateDirectory(sourceDir);
         var manifest = new WebAppManifest(
-            Format: 1,
+            Format: 2,
             InstalledAt: DateTimeOffset.UnixEpoch,
             SourceCommit: "abcdef123456",
             Package: new PackageInfo("owner@repo", "Sample App", "0.1.0"),
@@ -29,7 +31,8 @@ public sealed class AppShortcutServiceTests
             Entry: new EntryInfo("index.html", null, null, null, Mode: "static", Server: null),
             Network: new NetworkInfo("127.0.0.1", 0, "dynamic"),
             Storage: new StorageInfo("ephemeral", false, false),
-            Window: new WindowInfo(800, 600, true, false));
+            Window: new WindowInfo(800, 600, true, false),
+            Source: new SourceInfo("github", "owner", "repo", "main", "*", "."));
         TomlManifestStore.SaveWebApp(manifestPath, manifest);
 
         var app = new InstalledApp(manifest, installTemp.Path, manifestPath);
@@ -62,7 +65,7 @@ public sealed class AppShortcutServiceTests
         File.WriteAllBytes(iconPath, new byte[] { 0x00, 0x00, 0x01, 0x00 });
 
         var manifest = new WebAppManifest(
-            Format: 1,
+            Format: 2,
             InstalledAt: DateTimeOffset.UnixEpoch,
             SourceCommit: "abcdef123456",
             Package: new PackageInfo("owner@repo", "Ico App", "0.1.0"),
@@ -71,7 +74,8 @@ public sealed class AppShortcutServiceTests
             Entry: new EntryInfo("index.html", null, null, "assets/app.ico", Mode: "static", Server: null),
             Network: new NetworkInfo("127.0.0.1", 0, "dynamic"),
             Storage: new StorageInfo("ephemeral", false, false),
-            Window: new WindowInfo(800, 600, true, false));
+            Window: new WindowInfo(800, 600, true, false),
+            Source: new SourceInfo("github", "owner", "repo", "main", "*", "."));
         TomlManifestStore.SaveWebApp(manifestPath, manifest);
         var app = new InstalledApp(manifest, installTemp.Path, manifestPath);
 
@@ -99,7 +103,7 @@ public sealed class AppShortcutServiceTests
         File.WriteAllBytes(Path.Combine(assetDir, "logo.png"), new byte[] { 1, 2, 3 });
 
         var manifest = new WebAppManifest(
-            Format: 1,
+            Format: 2,
             InstalledAt: DateTimeOffset.UnixEpoch,
             SourceCommit: "abcdef123456",
             Package: new PackageInfo("owner@repo", "Png App", "0.1.0"),
@@ -108,7 +112,8 @@ public sealed class AppShortcutServiceTests
             Entry: new EntryInfo("index.html", null, null, "assets/logo.png", Mode: "static", Server: null),
             Network: new NetworkInfo("127.0.0.1", 0, "dynamic"),
             Storage: new StorageInfo("ephemeral", false, false),
-            Window: new WindowInfo(800, 600, true, false));
+            Window: new WindowInfo(800, 600, true, false),
+            Source: new SourceInfo("github", "owner", "repo", "main", "*", "."));
         TomlManifestStore.SaveWebApp(manifestPath, manifest);
         var app = new InstalledApp(manifest, installTemp.Path, manifestPath);
 
@@ -134,7 +139,7 @@ public sealed class AppShortcutServiceTests
         Directory.CreateDirectory(sourceDir);
 
         var manifest = new WebAppManifest(
-            Format: 1,
+            Format: 2,
             InstalledAt: DateTimeOffset.UnixEpoch,
             SourceCommit: "abcdef123456",
             Package: new PackageInfo("owner@repo", "weird:name*?", "0.1.0"),
@@ -143,7 +148,8 @@ public sealed class AppShortcutServiceTests
             Entry: new EntryInfo("index.html", null, null, null, Mode: "static", Server: null),
             Network: new NetworkInfo("127.0.0.1", 0, "dynamic"),
             Storage: new StorageInfo("ephemeral", false, false),
-            Window: new WindowInfo(800, 600, true, false));
+            Window: new WindowInfo(800, 600, true, false),
+            Source: new SourceInfo("github", "owner", "repo", "main", "*", "."));
         TomlManifestStore.SaveWebApp(manifestPath, manifest);
         var app = new InstalledApp(manifest, installTemp.Path, manifestPath);
 

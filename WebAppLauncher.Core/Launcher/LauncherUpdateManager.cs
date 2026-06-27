@@ -18,6 +18,7 @@ public sealed class LauncherUpdateManager
 {
     public const string Repository = "hhsshoo12/WebApp_Launcher";
     public const string LauncherTagPrefix = "v";
+    public const string RuntimeTagPrefix = "runtime-";
     public const string LauncherAssetPattern = @"^WAPL-Launcher-v(?<version>[^/]+)\.zip$";
 
     private static readonly Regex AssetRegex = new(
@@ -84,7 +85,7 @@ public sealed class LauncherUpdateManager
                 .Where(element => element.TryGetProperty("tag_name", out var tag) &&
                                   tag.GetString() is { } tagName &&
                                   tagName.StartsWith(LauncherTagPrefix, StringComparison.OrdinalIgnoreCase) &&
-                                  !tagName.StartsWith(RuntimeUpdateManager.RuntimeTagPrefix, StringComparison.OrdinalIgnoreCase))
+                                  !tagName.StartsWith(RuntimeTagPrefix, StringComparison.OrdinalIgnoreCase))
                 .Select(element => new
                 {
                     TagName = element.GetProperty("tag_name").GetString() ?? string.Empty,

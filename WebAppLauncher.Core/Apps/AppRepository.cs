@@ -22,25 +22,6 @@ public sealed class AppRepository
             try
             {
                 var manifest = TomlManifestStore.LoadWebApp(manifestPath);
-                var migratedRuntime = manifest.Runtime.Python.Equals("python312", StringComparison.OrdinalIgnoreCase)
-                    ? manifest.Runtime with { Python = "python313" }
-                    : manifest.Runtime;
-                var requiresMigration =
-                    migratedRuntime != manifest.Runtime ||
-                    manifest.Network.Port != 0 ||
-                    !manifest.Network.Origin.Equals("dynamic", StringComparison.OrdinalIgnoreCase) ||
-                    !manifest.Storage.BrowserProfile.Equals("ephemeral", StringComparison.OrdinalIgnoreCase);
-                if (requiresMigration)
-                {
-                    manifest = manifest with
-                    {
-                        Runtime = migratedRuntime,
-                        Network = new NetworkInfo("127.0.0.1", 0, "dynamic"),
-                        Storage = manifest.Storage with { BrowserProfile = "ephemeral" }
-                    };
-                    TomlManifestStore.SaveWebApp(manifestPath, manifest);
-                }
-
                 apps.Add(new InstalledApp(manifest, Path.GetDirectoryName(manifestPath)!, manifestPath));
             }
             catch

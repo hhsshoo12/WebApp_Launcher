@@ -1,5 +1,4 @@
 <Solution>
-  <Project Path="WebAppLauncher.Bootstrapper/WebAppLauncher.Bootstrapper.csproj" />
   <Project Path="WebAppLauncher.Cli/WebAppLauncher.Cli.csproj" />
   <Project Path="WebAppLauncher.Core/WebAppLauncher.Core.csproj" />
   <Project Path="WebAppLauncher.Tests/WebAppLauncher.Tests.csproj" />

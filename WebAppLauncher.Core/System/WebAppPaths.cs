@@ -18,7 +18,6 @@ public sealed class WebAppPaths
     public string UvCache => Path.Combine(Packages, "uv-cache");
     public string PnpmStore => Path.Combine(Packages, "pnpm-store");
     public string AppUpdates => Path.Combine(Packages, "app-updates");
-    public string RuntimeUpdates => Path.Combine(Packages, "runtime-updates");
 
     public string GitExecutable => Path.Combine(Tools, "git", "cmd", "git.exe");
     public string UvExecutable => Path.Combine(Tools, "uv", "uv.exe");
@@ -50,7 +49,6 @@ public sealed class WebAppPaths
         Directory.CreateDirectory(UvCache);
         Directory.CreateDirectory(PnpmStore);
         Directory.CreateDirectory(AppUpdates);
-        Directory.CreateDirectory(RuntimeUpdates);
 
         Directory.CreateDirectory(Path.Combine(Runtime, "python313"));
         Directory.CreateDirectory(Path.Combine(Runtime, "python314"));

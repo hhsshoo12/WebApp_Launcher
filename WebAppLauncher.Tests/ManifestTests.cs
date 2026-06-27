@@ -1,46 +1,32 @@
-using WebAppLauncher.Core;
-using System.IO.Compression;
-using System.Net;
-using System.Security.Cryptography;
-using System.Text;
 using System.Diagnostics;
+using WebAppLauncher.Core;
 
 namespace WebAppLauncher.Tests;
 
 public sealed class ManifestTests
 {
     [Fact]
-    public void LoadWapkAcceptsValidManifest()
+    public void LoadWapkAcceptsFormat2ManifestWithoutVersion()
     {
         using var temp = new TempDirectory();
         var path = temp.Write("app.wapk", ValidWapk());
 
         var manifest = TomlManifestStore.LoadWapk(path);
 
+        Assert.Equal(2, manifest.Format);
         Assert.Equal("hhsshoo12@webapp-test", manifest.Package.Id);
-        Assert.Equal("github", manifest.Source.Provider);
+        Assert.Equal(string.Empty, manifest.Package.Version);
+        Assert.Equal("*", manifest.Source.Commit);
         Assert.Equal("python313", manifest.Runtime.Python);
-        Assert.Equal("app.html", manifest.Entry.Html);
-        Assert.Equal("new_backend", manifest.Window.InstanceMode);
     }
 
     [Fact]
-    public void LoadFormat2WapkAllowsMissingVersion()
+    public void LoadWapkRejectsFormat1Manifest()
     {
         using var temp = new TempDirectory();
-        var path = temp.Write(
-            "app-v2.wapk",
-            ValidWapk()
-                .Replace("format = 1", "format = 2")
-                .Replace("version = \"1.0\"\r\n", string.Empty)
-                .Replace("version = \"1.0\"\n", string.Empty)
-                .Replace("commit = \"abcdef1234567890\"", "commit = \"*\""));
+        var path = temp.Write("old.wapk", ValidWapk().Replace("format = 2", "format = 1"));
 
-        var manifest = TomlManifestStore.LoadWapk(path);
-
-        Assert.Equal(2, manifest.Format);
-        Assert.Equal(string.Empty, manifest.Package.Version);
-        Assert.Equal("*", manifest.Source.Commit);
+        Assert.Throws<InvalidDataException>(() => TomlManifestStore.LoadWapk(path));
     }
 
     [Fact]
@@ -64,58 +50,28 @@ public sealed class ManifestTests
     }
 
     [Fact]
-    public void LoadFormat1WapkRejectsWildcardCommit()
+    public void LoadWapkRejectsUnsupportedPythonRuntime()
     {
         using var temp = new TempDirectory();
-        var path = temp.Write(
-            "bad-wildcard.wapk",
-            ValidWapk().Replace("commit = \"abcdef1234567890\"", "commit = \"*\""));
+        var path = temp.Write("old-runtime.wapk", ValidWapk().Replace("python313", "python311"));
 
         Assert.Throws<InvalidDataException>(() => TomlManifestStore.LoadWapk(path));
     }
 
     [Fact]
-    public void LoadWapkRejectsRemovedPython312Runtime()
-    {
-        using var temp = new TempDirectory();
-        var path = temp.Write("old-runtime.wapk", ValidWapk().Replace("python313", "python312"));
-
-        Assert.Throws<InvalidDataException>(() => TomlManifestStore.LoadWapk(path));
-    }
-
-    [Fact]
-    public void SaveAndLoadWebAppRoundTripsManifest()
+    public void SaveAndLoadWebAppRoundTripsFormat2Manifest()
     {
         using var temp = new TempDirectory();
         var path = Path.Combine(temp.Path, "webapp-test.webapp");
-        var manifest = new WebAppManifest(
-            1,
-            DateTimeOffset.Parse("2026-06-23T00:00:00Z"),
-            "abcdef1234567890",
-            new PackageInfo("hhsshoo12@webapp-test", "WebApp Test", "1.0"),
-            new InstalledPaths("source", "data", "logs", "temp"),
-            new RuntimeInfo("python313", "nodejs-lts-22"),
-            new EntryInfo("app.html", null, null, null, "server", "app.py"),
-            new NetworkInfo("127.0.0.1", 0, "dynamic"),
-            new StorageInfo("ephemeral", false, false),
-            new WindowInfo(
-                1200,
-                800,
-                true,
-                false,
-                Transparent: true,
-                Borderless: true,
-                Fullscreen: false,
-                AlwaysOnTop: true,
-                StartMaximized: true,
-                InstanceMode: "share_backend"));
+        var manifest = CreateManifest("1a2b3c4d", new string('1', 40));
 
         TomlManifestStore.SaveWebApp(path, manifest);
         var loaded = TomlManifestStore.LoadWebApp(path);
 
+        Assert.Equal(2, loaded.Format);
         Assert.Equal(manifest.Package, loaded.Package);
+        Assert.Equal(manifest.Source, loaded.Source);
         Assert.Equal(manifest.Network, loaded.Network);
-        Assert.Equal(manifest.Entry.Server, loaded.Entry.Server);
         Assert.Equal(manifest.Window, loaded.Window);
     }
 
@@ -124,53 +80,25 @@ public sealed class ManifestTests
     {
         using var temp = new TempDirectory();
         var path = Path.Combine(temp.Path, "webapp-test.webapp");
-        var manifest = new WebAppManifest(
-            1,
-            DateTimeOffset.Parse("2026-06-23T00:00:00Z"),
-            "abcdef1234567890",
-            new PackageInfo("hhsshoo12@webapp-test", "WebApp Test", "1.0"),
-            new InstalledPaths("source", "data", "logs", "temp"),
-            new RuntimeInfo("python313", "nodejs-lts-22"),
-            new EntryInfo("app.html", null, null, null, "server", "app.py"),
-            new NetworkInfo("127.0.0.1", 0, "dynamic"),
-            new StorageInfo("persistent", false, false),
-            new WindowInfo(1200, 800, true, false));
+        var manifest = CreateManifest("1a2b3c4d", new string('1', 40)) with
+        {
+            Storage = new StorageInfo("persistent", false, false)
+        };
 
         Assert.Throws<InvalidDataException>(() => TomlManifestStore.SaveWebApp(path, manifest));
     }
 
     [Fact]
-    public void RepositoryMigratesLegacyRuntimePortAndBrowserProfile()
+    public void SaveWebAppRejectsStoredPort()
     {
         using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        var installDirectory = paths.GetAppDirectory("hhsshoo12@webapp-test", "1.0");
-        Directory.CreateDirectory(installDirectory);
-        var manifestPath = Path.Combine(installDirectory, "webapp-test.webapp");
-        var legacyManifest = new WebAppManifest(
-            1,
-            DateTimeOffset.Parse("2026-06-23T00:00:00Z"),
-            "abcdef1234567890",
-            new PackageInfo("hhsshoo12@webapp-test", "WebApp Test", "1.0"),
-            new InstalledPaths("source", "data", "logs", "temp"),
-            new RuntimeInfo("python312", "none"),
-            new EntryInfo("app.html", null, null, null, "server", "app.py"),
-            new NetworkInfo("127.0.0.1", 52017, "http://127.0.0.1:52017"),
-            new StorageInfo("persistent", false, false),
-            new WindowInfo(1200, 800, true, false));
-        WriteLegacyWebApp(manifestPath, legacyManifest);
+        var path = Path.Combine(temp.Path, "webapp-test.webapp");
+        var manifest = CreateManifest("1a2b3c4d", new string('1', 40)) with
+        {
+            Network = new NetworkInfo("127.0.0.1", 52000, "http://127.0.0.1:52000")
+        };
 
-        var installed = new AppRepository(paths).ListInstalled();
-        var migrated = TomlManifestStore.LoadWebApp(manifestPath);
-
-        Assert.Single(installed);
-        Assert.Equal("python313", installed[0].Manifest.Runtime.Python);
-        Assert.Equal("python313", migrated.Runtime.Python);
-        Assert.Equal(0, migrated.Network.Port);
-        Assert.Equal("dynamic", migrated.Network.Origin);
-        Assert.Equal("ephemeral", migrated.Storage.BrowserProfile);
-        Assert.DoesNotContain("python312", File.ReadAllText(manifestPath));
+        Assert.Throws<InvalidDataException>(() => TomlManifestStore.SaveWebApp(path, manifest));
     }
 
     [Fact]
@@ -321,227 +249,6 @@ public sealed class ManifestTests
     }
 
     [Fact]
-    public async Task RuntimeUpdateDownloadVerifiesAndExtractsArchive()
-    {
-        using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        var zip = CreateRuntimeZip();
-        var checksum = Convert.ToHexString(SHA256.HashData(zip));
-        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
-        {
-            ["https://example.test/runtime.zip"] = zip,
-            ["https://example.test/runtime.zip.sha256"] = Encoding.UTF8.GetBytes(checksum)
-        }));
-        var manager = new RuntimeUpdateManager(paths, client);
-        var bundle = new RuntimeBundleInfo(
-            "0.2",
-            "https://example.test/runtime.zip",
-            "https://example.test/runtime.zip.sha256",
-            "available");
-
-        var downloaded = await manager.DownloadAsync(bundle);
-
-        Assert.Equal("downloaded", downloaded.Status);
-        Assert.True(File.Exists(Path.Combine(downloaded.StagingDirectory!, "runtime-manifest.toml")));
-        Assert.True(Directory.Exists(Path.Combine(downloaded.StagingDirectory!, "LICENSES")));
-    }
-
-    [Fact]
-    public async Task RuntimeUpdateCheckTreatsMissingReleaseAsNoRelease()
-    {
-        using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>()));
-        var manager = new RuntimeUpdateManager(paths, client);
-
-        var bundle = await manager.CheckAsync();
-
-        Assert.Equal("no_release", bundle.Status);
-        Assert.Equal("Runtime release was not found.", bundle.Message);
-    }
-
-    [Fact]
-    public async Task RuntimeUpdateCheckPicksLatestRuntimeTaggedRelease()
-    {
-        using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        var payload = ReleaseListJson(
-            Release("v0.1.0", "2026-06-20T00:00:00Z"),
-            Release("runtime-v0.1", "2026-06-26T00:00:00Z",
-                "WAPL-Runtime-v0.1.zip", "https://example.test/runtime.zip",
-                "WAPL-Runtime-v0.1.zip.sha256", "https://example.test/runtime.zip.sha256"),
-            Release("v0.0.9", "2026-06-19T00:00:00Z"));
-        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
-        {
-            ["https://api.github.com/repos/hhsshoo12/WebApp_Launcher/releases?per_page=30"] =
-                Encoding.UTF8.GetBytes(payload)
-        }));
-        var manager = new RuntimeUpdateManager(paths, client);
-
-        var bundle = await manager.CheckAsync();
-
-        Assert.Equal("available", bundle.Status);
-        Assert.Equal("0.1", bundle.Version);
-        Assert.Equal("https://example.test/runtime.zip", bundle.ZipUrl);
-        Assert.Equal("https://example.test/runtime.zip.sha256", bundle.ChecksumUrl);
-    }
-
-    [Fact]
-    public async Task RuntimeUpdateCheckSkipsReleasesWithoutRuntimePrefix()
-    {
-        using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        var payload = ReleaseListJson(
-            Release("v0.1.0", "2026-06-26T00:00:00Z", assets: []),
-            Release("nightly-2026-06-26", "2026-06-26T01:00:00Z", assets: []));
-        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
-        {
-            ["https://api.github.com/repos/hhsshoo12/WebApp_Launcher/releases?per_page=30"] =
-                Encoding.UTF8.GetBytes(payload)
-        }));
-        var manager = new RuntimeUpdateManager(paths, client);
-
-        var bundle = await manager.CheckAsync();
-
-        Assert.Equal("error", bundle.Status);
-        Assert.Contains("runtime-*", bundle.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task RuntimeUpdateCheckReportsCurrentWhenInstalledVersionMatches()
-    {
-        using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        File.WriteAllText(
-            Path.Combine(paths.Root, "runtime-manifest.toml"),
-            "[runtime]\nbundle_version = \"0.1\"\n",
-            Encoding.UTF8);
-        var payload = ReleaseListJson(
-            Release("runtime-v0.1", "2026-06-26T00:00:00Z",
-                "WAPL-Runtime-v0.1.zip", "https://example.test/runtime.zip",
-                "WAPL-Runtime-v0.1.zip.sha256", "https://example.test/runtime.zip.sha256"));
-        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
-        {
-            ["https://api.github.com/repos/hhsshoo12/WebApp_Launcher/releases?per_page=30"] =
-                Encoding.UTF8.GetBytes(payload)
-        }));
-        var manager = new RuntimeUpdateManager(paths, client);
-
-        var bundle = await manager.CheckAsync();
-
-        Assert.Equal("current", bundle.Status);
-        Assert.Equal("0.1", bundle.Version);
-        Assert.Equal("0.1", bundle.InstalledVersion);
-    }
-
-    private static string ReleaseListJson(params string[] releases)
-    {
-        return "[\n  " + string.Join(",\n  ", releases) + "\n]";
-    }
-
-    private static string Release(
-        string tag,
-        string publishedAt,
-        params string[] assets)
-    {
-        var assetEntries = new List<string>();
-        for (var i = 0; i < assets.Length; i += 2)
-        {
-            assetEntries.Add($$"""
-                  {
-                    "name": "{{assets[i]}}",
-                    "browser_download_url": "{{assets[i + 1]}}"
-                  }
-            """);
-        }
-        var assetJson = assetEntries.Count == 0
-            ? "[]"
-            : "[\n    " + string.Join(",\n    ", assetEntries) + "\n  ]";
-        return $$"""
-              {
-                "tag_name": "{{tag}}",
-                "published_at": "{{publishedAt}}",
-                "draft": false,
-                "assets": {{assetJson}}
-              }
-        """;
-    }
-
-    [Fact]
-    public async Task RuntimeUpdateRejectsPathTraversalArchive()
-    {
-        using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        using var memory = new MemoryStream();
-        using (var archive = new ZipArchive(memory, ZipArchiveMode.Create, leaveOpen: true))
-        {
-            archive.CreateEntry("../escape.txt");
-        }
-
-        var zip = memory.ToArray();
-        var checksum = Convert.ToHexString(SHA256.HashData(zip));
-        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
-        {
-            ["https://example.test/bad.zip"] = zip,
-            ["https://example.test/bad.zip.sha256"] = Encoding.UTF8.GetBytes(checksum)
-        }));
-        var manager = new RuntimeUpdateManager(paths, client);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => manager.DownloadAsync(
-            new RuntimeBundleInfo(
-                "bad",
-                "https://example.test/bad.zip",
-                "https://example.test/bad.zip.sha256",
-                "available")));
-    }
-
-    [Fact]
-    public async Task RuntimeUpdateRejectsFileWhereDirectoryIsRequiredAndCleansWork()
-    {
-        using var temp = new TempDirectory();
-        var paths = new WebAppPaths(temp.Path);
-        paths.EnsureRootLayout();
-        using var memory = new MemoryStream();
-        using (var archive = new ZipArchive(memory, ZipArchiveMode.Create, leaveOpen: true))
-        {
-            Write("runtime-manifest.toml", "[runtime]\nbundle_version = \"bad\"\n");
-            Write("runtime", "not a directory");
-            Write("tools/git/git.exe", "git");
-            Write("LICENSES/NOTICE.txt", "licenses");
-
-            void Write(string path, string value)
-            {
-                var entry = archive.CreateEntry(path);
-                using var writer = new StreamWriter(entry.Open(), Encoding.UTF8);
-                writer.Write(value);
-            }
-        }
-
-        var zip = memory.ToArray();
-        var checksum = Convert.ToHexString(SHA256.HashData(zip));
-        using var client = new HttpClient(new StaticHttpHandler(new Dictionary<string, byte[]>
-        {
-            ["https://example.test/invalid.zip"] = zip,
-            ["https://example.test/invalid.zip.sha256"] = Encoding.UTF8.GetBytes(checksum)
-        }));
-        var manager = new RuntimeUpdateManager(paths, client);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => manager.DownloadAsync(
-            new RuntimeBundleInfo(
-                "bad",
-                "https://example.test/invalid.zip",
-                "https://example.test/invalid.zip.sha256",
-                "available")));
-        Assert.False(Directory.Exists(Path.Combine(paths.RuntimeUpdates, "vbad")));
-    }
-
-    [Fact]
     public async Task GitSourceResolverResolvesDefaultBranchLatestAndPinnedCommit()
     {
         using var temp = new TempDirectory();
@@ -592,19 +299,18 @@ public sealed class ManifestTests
     {
         return """
         [wapk]
-        format = 1
+        format = 2
 
         [package]
         id = "hhsshoo12@webapp-test"
         name = "WebApp Test"
-        version = "1.0"
 
         [source]
         provider = "github"
         owner = "hhsshoo12"
         repo = "webapp-test"
         branch = "main"
-        commit = "abcdef1234567890"
+        commit = "*"
         app_dir = "."
 
         [runtime]
@@ -623,6 +329,32 @@ public sealed class ManifestTests
         resizable = true
         devtools = false
         """;
+    }
+
+    private static WebAppManifest CreateManifest(string version, string commit)
+    {
+        return new WebAppManifest(
+            2,
+            DateTimeOffset.Parse("2026-06-23T00:00:00Z"),
+            commit,
+            new PackageInfo("hhsshoo12@webapp-test", "WebApp Test", version),
+            new InstalledPaths("source", "data", "logs", "temp"),
+            new RuntimeInfo("python313", "nodejs-lts-22"),
+            new EntryInfo("app.html", null, null, null, "server", "app.py"),
+            new NetworkInfo("127.0.0.1", 0, "dynamic"),
+            new StorageInfo("ephemeral", false, false),
+            new WindowInfo(
+                1200,
+                800,
+                true,
+                false,
+                Transparent: true,
+                Borderless: true,
+                Fullscreen: false,
+                AlwaysOnTop: true,
+                StartMaximized: true,
+                InstanceMode: "share_backend"),
+            new SourceInfo("github", "hhsshoo12", "webapp-test", "main", "*", "."));
     }
 
     private static InstalledApp CreateInstalledApp(WebAppPaths paths, string version, string commit)
@@ -654,76 +386,6 @@ public sealed class ManifestTests
         return new InstalledApp(manifest, directory, manifestPath);
     }
 
-    private static void WriteLegacyWebApp(string path, WebAppManifest manifest)
-    {
-        File.WriteAllText(
-            path,
-            $$"""
-            [webapp]
-            format = {{manifest.Format}}
-            installed_at = "{{manifest.InstalledAt:O}}"
-            source_commit = "{{manifest.SourceCommit}}"
-
-            [package]
-            id = "{{manifest.Package.Id}}"
-            name = "{{manifest.Package.Name}}"
-            version = "{{manifest.Package.Version}}"
-
-            [paths]
-            source = "{{manifest.Paths.Source}}"
-            data = "{{manifest.Paths.Data}}"
-            logs = "{{manifest.Paths.Logs}}"
-            temp = "{{manifest.Paths.Temp}}"
-
-            [runtime]
-            python = "{{manifest.Runtime.Python}}"
-            node = "{{manifest.Runtime.Node}}"
-
-            [entry]
-            mode = "{{manifest.Entry.Mode}}"
-            html = "{{manifest.Entry.Html}}"
-            server = "{{manifest.Entry.Server}}"
-            icon = ""
-
-            [network]
-            host = "{{manifest.Network.Host}}"
-            port = {{manifest.Network.Port}}
-            origin = "{{manifest.Network.Origin}}"
-
-            [storage]
-            browser_profile = "{{manifest.Storage.BrowserProfile}}"
-            pwa = {{manifest.Storage.Pwa.ToString().ToLowerInvariant()}}
-            service_worker = {{manifest.Storage.ServiceWorker.ToString().ToLowerInvariant()}}
-
-            [window]
-            width = {{manifest.Window.Width}}
-            height = {{manifest.Window.Height}}
-            resizable = {{manifest.Window.Resizable.ToString().ToLowerInvariant()}}
-            devtools = {{manifest.Window.Devtools.ToString().ToLowerInvariant()}}
-            """);
-    }
-
-    private static byte[] CreateRuntimeZip()
-    {
-        using var memory = new MemoryStream();
-        using (var archive = new ZipArchive(memory, ZipArchiveMode.Create, leaveOpen: true))
-        {
-            Write("runtime-manifest.toml", "[runtime]\nbundle_version = \"0.2\"\n");
-            Write("runtime/python313/python.exe", "python");
-            Write("tools/git/git.exe", "git");
-            Write("LICENSES/NOTICE.txt", "licenses");
-
-            void Write(string path, string value)
-            {
-                var entry = archive.CreateEntry(path);
-                using var writer = new StreamWriter(entry.Open(), Encoding.UTF8);
-                writer.Write(value);
-            }
-        }
-
-        return memory.ToArray();
-    }
-
     private static string RunGit(string workingDirectory, string arguments)
     {
         var startInfo = new ProcessStartInfo("git", arguments)
@@ -745,26 +407,6 @@ public sealed class ManifestTests
         }
 
         return stdout.Trim();
-    }
-}
-
-internal sealed class StaticHttpHandler(IReadOnlyDictionary<string, byte[]> responses)
-    : HttpMessageHandler
-{
-    protected override Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request,
-        CancellationToken cancellationToken)
-    {
-        if (request.RequestUri is not null &&
-            responses.TryGetValue(request.RequestUri.ToString(), out var content))
-        {
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(content)
-            });
-        }
-
-        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
     }
 }
 

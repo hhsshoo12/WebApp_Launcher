@@ -122,6 +122,8 @@ h2 { font-size: 20px; }
 }
 .primary-button { color: #fff; background: var(--accent); border: 1px solid var(--accent); }
 .primary-button:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+.primary-button.is-latest { color: #17645f; background: transparent; border: 1px solid #17645f; cursor: default; opacity: 1; }
+.primary-button.is-latest:hover { color: #17645f; background: transparent; border-color: #17645f; }
 .secondary-button { color: var(--ink); background: #fff; border: 1px solid var(--line-strong); }
 .secondary-button:hover { background: #f7f9f9; border-color: #aeb9b9; }
 .danger-button { color: #fff; background: var(--danger); border-color: var(--danger); }
