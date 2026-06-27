@@ -19,21 +19,54 @@ public sealed class RuntimeInspector
         this.paths = paths;
     }
 
+    private RuntimeSpec CreateSpec(string id, string expectedVersion)
+    {
+        if (id.StartsWith("python", StringComparison.OrdinalIgnoreCase))
+        {
+            var displayVersion = id.Substring("python".Length);
+            if (displayVersion.Length >= 2)
+            {
+                displayVersion = displayVersion.Insert(1, ".");
+            }
+            return new RuntimeSpec(id, $"Python {displayVersion}", expectedVersion, paths.GetPythonExecutable(id), ["--version"]);
+        }
+        if (id.StartsWith("nodejs-lts-", StringComparison.OrdinalIgnoreCase))
+        {
+            var displayVersion = id.Substring("nodejs-lts-".Length);
+            return new RuntimeSpec(id, $"Node.js LTS {displayVersion}", expectedVersion, paths.GetNodeExecutable(id), ["--version"]);
+        }
+        if (id.Equals("git", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RuntimeSpec(id, "Git", expectedVersion, paths.GitExecutable, ["--version"]);
+        }
+        if (id.Equals("uv", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RuntimeSpec(id, "uv", expectedVersion, paths.UvExecutable, ["--version"]);
+        }
+        if (id.Equals("pnpm", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RuntimeSpec(id, "pnpm", expectedVersion, ResolvePnpmExecutable(), ["--version"]);
+        }
+        return new RuntimeSpec(id, id, expectedVersion, Path.Combine(paths.Tools, id), ["--version"]);
+    }
+
     public async Task<IReadOnlyList<RuntimeStatus>> InspectAsync(
         CancellationToken cancellationToken = default)
     {
         var versions = ReadManagedVersions();
-        var specs = new[]
+        var ids = versions.Keys.ToList();
+        if (ids.Count == 0)
         {
-            new RuntimeSpec("python313", "Python 3.13", VersionOf("python313"), paths.GetPythonExecutable("python313"), ["--version"]),
-            new RuntimeSpec("python314", "Python 3.14", VersionOf("python314"), paths.GetPythonExecutable("python314"), ["--version"]),
-            new RuntimeSpec("nodejs-lts-22", "Node.js LTS 22", VersionOf("nodejs-lts-22"), paths.GetNodeExecutable("nodejs-lts-22"), ["--version"]),
-            new RuntimeSpec("nodejs-lts-24", "Node.js LTS 24", VersionOf("nodejs-lts-24"), paths.GetNodeExecutable("nodejs-lts-24"), ["--version"]),
-            new RuntimeSpec("git", "Git", VersionOf("git"), paths.GitExecutable, ["--version"]),
-            new RuntimeSpec("uv", "uv", VersionOf("uv"), paths.UvExecutable, ["--version"]),
-            new RuntimeSpec("pnpm", "pnpm", VersionOf("pnpm"), ResolvePnpmExecutable(), ["--version"])
-        };
+            ids = ["python313", "python314", "nodejs-lts-22", "nodejs-lts-24", "git", "uv", "pnpm"];
+        }
+        else
+        {
+            if (!ids.Contains("git", StringComparer.OrdinalIgnoreCase)) ids.Add("git");
+            if (!ids.Contains("uv", StringComparer.OrdinalIgnoreCase)) ids.Add("uv");
+            if (!ids.Contains("pnpm", StringComparer.OrdinalIgnoreCase)) ids.Add("pnpm");
+        }
 
+        var specs = ids.Select(id => CreateSpec(id, VersionOf(id))).ToArray();
         return await Task.WhenAll(specs.Select(spec => InspectAsync(spec, cancellationToken)));
 
         string VersionOf(string id) => versions.TryGetValue(id, out var value) ? value : "unknown";
@@ -105,10 +138,7 @@ public sealed class RuntimeInspector
         try
         {
             var document = SimpleToml.ParseFile(path);
-            var ids = new[]
-            {
-                "python313", "python314", "nodejs-lts-22", "nodejs-lts-24", "git", "uv", "pnpm"
-            };
+            var ids = document.GetSectionKeys("versions");
             return ids
                 .Select(id => (Id: id, Version: document.GetOptionalString("versions", id)))
                 .Where(item => item.Version is not null)

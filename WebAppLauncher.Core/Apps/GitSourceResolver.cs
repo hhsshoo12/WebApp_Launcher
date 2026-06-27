@@ -127,6 +127,20 @@ public sealed class GitSourceResolver
                 response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
                 response.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
+                var remainingValues = response.Headers.Contains("X-RateLimit-Remaining")
+                    ? response.Headers.GetValues("X-RateLimit-Remaining")
+                    : null;
+                if (remainingValues != null)
+                {
+                    foreach (var val in remainingValues)
+                    {
+                        if (val == "0")
+                        {
+                            return; // Bypass check on rate limit
+                        }
+                    }
+                }
+
                 throw new InvalidOperationException(
                     $"GitHub 저장소 {source.Owner}/{source.Repo}에 접근할 수 없습니다. " +
                     "Public Repository만 지원합니다.");

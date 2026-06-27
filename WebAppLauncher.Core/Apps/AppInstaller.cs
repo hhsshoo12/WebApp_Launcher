@@ -189,61 +189,22 @@ public sealed class AppInstaller
     internal static void CopyDirectory(string source, string destination)
     {
         Directory.CreateDirectory(destination);
-        foreach (var directory in EnumerateDirectories(source))
+        foreach (var entry in Directory.EnumerateFileSystemEntries(source))
         {
-            var targetDirectory = Path.Combine(destination, Path.GetRelativePath(source, directory));
-            Directory.CreateDirectory(targetDirectory);
-        }
-
-        foreach (var file in EnumerateFiles(source))
-        {
-            var targetFile = Path.Combine(destination, Path.GetRelativePath(source, file));
-            Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
-            File.Copy(file, targetFile, overwrite: true);
-        }
-    }
-
-    private static IEnumerable<string> EnumerateDirectories(string root)
-    {
-        foreach (var directory in Directory.EnumerateDirectories(root))
-        {
-            if (Path.GetFileName(directory).Equals(".git", StringComparison.OrdinalIgnoreCase) ||
-                IsReparsePoint(directory))
+            var name = Path.GetFileName(entry);
+            if (name.Equals(".git", StringComparison.OrdinalIgnoreCase) || IsReparsePoint(entry))
             {
                 continue;
             }
 
-            yield return directory;
-            foreach (var child in EnumerateDirectories(directory))
+            var target = Path.Combine(destination, name);
+            if (Directory.Exists(entry))
             {
-                yield return child;
+                CopyDirectory(entry, target);
             }
-        }
-    }
-
-    private static IEnumerable<string> EnumerateFiles(string root)
-    {
-        foreach (var file in Directory.EnumerateFiles(root))
-        {
-            if (IsReparsePoint(file))
+            else
             {
-                continue;
-            }
-
-            yield return file;
-        }
-
-        foreach (var directory in Directory.EnumerateDirectories(root))
-        {
-            if (Path.GetFileName(directory).Equals(".git", StringComparison.OrdinalIgnoreCase) ||
-                IsReparsePoint(directory))
-            {
-                continue;
-            }
-
-            foreach (var file in EnumerateFiles(directory))
-            {
-                yield return file;
+                File.Copy(entry, target, overwrite: true);
             }
         }
     }

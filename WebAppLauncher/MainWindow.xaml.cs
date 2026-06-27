@@ -47,6 +47,8 @@ public partial class MainWindow : Window
     {
         try
         {
+            _ = Task.Run(() => CleanupOldTempProfiles());
+
             var profileDirectory = Path.Combine(paths.Root, "launcher-profile");
             Directory.CreateDirectory(profileDirectory);
             var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: profileDirectory);
@@ -700,4 +702,33 @@ public partial class MainWindow : Window
         Process.Start(startInfo);
     }
 
+    private void CleanupOldTempProfiles()
+    {
+        try
+        {
+            var tempBase = Path.Combine(Path.GetTempPath(), "WebAppLauncher", "webview");
+            if (Directory.Exists(tempBase))
+            {
+                foreach (var dir in Directory.EnumerateDirectories(tempBase))
+                {
+                    var name = Path.GetFileName(dir);
+                    if (Guid.TryParse(name, out _))
+                    {
+                        try
+                        {
+                            Directory.Delete(dir, recursive: true);
+                        }
+                        catch
+                        {
+                            // Ignored
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignored
+        }
+    }
 }

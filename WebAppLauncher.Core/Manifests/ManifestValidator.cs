@@ -14,19 +14,56 @@ public static class ManifestValidator
         @"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$",
         RegexOptions.Compiled);
 
-    private static readonly HashSet<string> PythonRuntimes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "none",
-        "python313",
-        "python314"
-    };
+    private static readonly HashSet<string> PythonRuntimes;
+    private static readonly HashSet<string> NodeRuntimes;
 
-    private static readonly HashSet<string> NodeRuntimes = new(StringComparer.OrdinalIgnoreCase)
+    static ManifestValidator()
     {
-        "none",
-        "nodejs-lts-22",
-        "nodejs-lts-24"
-    };
+        var webappRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".webapp");
+        var manifestPath = Path.Combine(webappRoot, "runtime-manifest.toml");
+        
+        var pythonList = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "none" };
+        var nodeList = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "none" };
+
+        if (File.Exists(manifestPath))
+        {
+            try
+            {
+                var document = SimpleToml.ParseFile(manifestPath);
+                foreach (var id in document.GetSectionKeys("versions"))
+                {
+                    if (id.StartsWith("python", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pythonList.Add(id);
+                    }
+                    else if (id.StartsWith("nodejs-lts-", StringComparison.OrdinalIgnoreCase) ||
+                             id.StartsWith("node", StringComparison.OrdinalIgnoreCase))
+                    {
+                        nodeList.Add(id);
+                    }
+                }
+            }
+            catch
+            {
+                PopulateDefaults(pythonList, nodeList);
+            }
+        }
+        else
+        {
+            PopulateDefaults(pythonList, nodeList);
+        }
+
+        PythonRuntimes = pythonList;
+        NodeRuntimes = nodeList;
+    }
+
+    private static void PopulateDefaults(HashSet<string> pythonList, HashSet<string> nodeList)
+    {
+        pythonList.Add("python313");
+        pythonList.Add("python314");
+        nodeList.Add("nodejs-lts-22");
+        nodeList.Add("nodejs-lts-24");
+    }
 
     public static void Validate(WapkManifest manifest)
     {
@@ -145,12 +182,12 @@ public static class ManifestValidator
     {
         if (!PythonRuntimes.Contains(runtime.Python))
         {
-            throw new InvalidDataException("runtime.python must be one of none, python313, python314.");
+            throw new InvalidDataException($"runtime.python '{runtime.Python}' is not supported.");
         }
 
         if (!NodeRuntimes.Contains(runtime.Node))
         {
-            throw new InvalidDataException("runtime.node must be one of none, nodejs-lts-22, nodejs-lts-24.");
+            throw new InvalidDataException($"runtime.node '{runtime.Node}' is not supported.");
         }
     }
 

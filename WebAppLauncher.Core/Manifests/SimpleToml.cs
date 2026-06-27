@@ -51,6 +51,16 @@ internal sealed class SimpleToml
         return new SimpleToml(sections);
     }
 
+    public IEnumerable<string> GetSectionKeys(string section)
+    {
+        if (sections.TryGetValue(section, out var table))
+        {
+            return table.Keys;
+        }
+
+        return Array.Empty<string>();
+    }
+
     public string GetString(string section, string key)
     {
         if (!sections.TryGetValue(section, out var table) ||

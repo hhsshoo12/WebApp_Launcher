@@ -94,6 +94,7 @@ public sealed class AppLauncher
         }
 
         var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start backend process.");
+        JobObject.AssociateProcess(process);
         _ = PumpLogsAsync(process, logPath);
         return process;
     }
