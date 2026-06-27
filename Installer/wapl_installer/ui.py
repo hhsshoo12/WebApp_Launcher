@@ -8,14 +8,15 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import traceback
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .config import (
     InstallCancelled,
-    NETWORK_ERROR_MESSAGE,
     PRODUCT_NAME,
     SIDEBAR_WIDTH,
+    SETUP_VERSION,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
     bundled_path,
@@ -255,7 +256,7 @@ class InstallerApp:
         button = ttk.Button(
             self.footer,
             text=text,
-            command=command,
+            command=lambda: self._run_ui_command(command),
             state=state,
             style="Wizard.TButton",
         )
@@ -263,6 +264,22 @@ class InstallerApp:
         if default:
             button.focus_set()
         return button
+
+    def _run_ui_command(self, command: object) -> None:
+        if not callable(command):
+            return
+        try:
+            command()
+        except Exception as exc:
+            self.running = False
+            self._write_log(f"UI 오류: {exc}")
+            self._write_log(traceback.format_exc().rstrip())
+            messagebox.showerror(
+                PRODUCT_NAME,
+                f"작업을 시작하지 못했습니다.\n\n{exc}\n\n설치 기록에서 자세한 내용을 확인할 수 있습니다.",
+            )
+            if self.operation != "remove":
+                self._show_log()
 
     def _build_welcome_page(self) -> None:
         frame = self._page_frame(

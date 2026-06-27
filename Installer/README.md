@@ -27,12 +27,12 @@ PyInstaller build dependency with pip, and writes:
 
 ```text
 artifacts/
-├─ WAPL-Launcher-v0.1.2.zip
-├─ WAPL-Launcher-v0.1.2.zip.sha256
-└─ WebAppLauncher-Setup-v0.1.2.exe
+├─ WAPL-Launcher-v0.1.3.zip
+├─ WAPL-Launcher-v0.1.3.zip.sha256
+└─ WebAppLauncher-Setup-v0.1.3.exe
 ```
 
-Upload the launcher ZIP and checksum to the `v0.1.2` GitHub release. Upload
+Upload the launcher ZIP and checksum to the `v0.1.3` GitHub release. Upload
 the setup executable as the public installer.
 
 Build the runtime bundle from an existing `.webapp` runtime installation:

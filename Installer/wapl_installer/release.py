@@ -104,39 +104,12 @@ def find_latest_launcher_release() -> dict:
         raise NetworkError("업데이트할 런처 릴리스를 찾지 못했습니다.")
 
     candidates.sort(key=lambda pair: pair[0], reverse=True)
-    _, release = candidates[0]
-    assets = release.get("assets") or []
-    zip_asset = None
-    for asset in assets:
-        if not isinstance(asset, dict):
-            continue
-        name = asset.get("name")
-        if isinstance(name, str) and LAUNCHER_ASSET_PATTERN.match(name):
-            zip_asset = asset
-            break
-    if zip_asset is None:
-        raise NetworkError("WAPL-Launcher-v*.zip 자산을 찾지 못했습니다.")
+    for _, release in candidates:
+        resolved = _resolve_asset_pair(release, LAUNCHER_ASSET_PATTERN)
+        if resolved is not None:
+            return resolved
 
-    version = LAUNCHER_ASSET_PATTERN.match(zip_asset["name"]).group("version")
-    checksum_name = f"{zip_asset['name']}.sha256"
-    checksum_asset = next(
-        (
-            asset
-            for asset in assets
-            if isinstance(asset, dict) and asset.get("name") == checksum_name
-        ),
-        None,
-    )
-    if checksum_asset is None:
-        raise NetworkError(f"{checksum_name} 자산을 찾지 못했습니다.")
-
-    return {
-        "version": version,
-        "tag": release["tag_name"],
-        "zip_url": zip_asset["browser_download_url"],
-        "zip_name": zip_asset["name"],
-        "checksum_url": checksum_asset["browser_download_url"],
-    }
+    raise NetworkError("완성된 WAPL-Launcher-v*.zip 릴리스 자산을 찾지 못했습니다.")
 
 
 def find_latest_runtime_release() -> dict:
@@ -160,21 +133,29 @@ def find_latest_runtime_release() -> dict:
         raise NetworkError("런타임 릴리스를 찾지 못했습니다.")
 
     candidates.sort(key=lambda pair: pair[0], reverse=True)
-    _, release = candidates[0]
+    for _, release in candidates:
+        resolved = _resolve_asset_pair(release, RUNTIME_ASSET_PATTERN)
+        if resolved is not None:
+            return resolved
+
+    raise NetworkError("완성된 WAPL-Runtime-v*.zip 릴리스 자산을 찾지 못했습니다.")
+
+
+def _resolve_asset_pair(release: dict, pattern: re.Pattern[str]) -> dict | None:
     assets = release.get("assets") or []
     zip_asset = None
     for asset in assets:
         if not isinstance(asset, dict):
             continue
         name = asset.get("name")
-        if isinstance(name, str) and RUNTIME_ASSET_PATTERN.match(name):
+        if isinstance(name, str) and pattern.match(name):
             zip_asset = asset
             break
     if zip_asset is None:
-        raise NetworkError("WAPL-Runtime-v*.zip 자산을 찾지 못했습니다.")
+        return None
 
-    version = RUNTIME_ASSET_PATTERN.match(zip_asset["name"]).group("version")
-    checksum_name = f"{zip_asset['name']}.sha256"
+    zip_name = zip_asset["name"]
+    checksum_name = f"{zip_name}.sha256"
     checksum_asset = next(
         (
             asset
@@ -184,13 +165,13 @@ def find_latest_runtime_release() -> dict:
         None,
     )
     if checksum_asset is None:
-        raise NetworkError(f"{checksum_name} 자산을 찾지 못했습니다.")
+        return None
 
     return {
-        "version": version,
+        "version": pattern.match(zip_name).group("version"),
         "tag": release["tag_name"],
         "zip_url": zip_asset["browser_download_url"],
-        "zip_name": zip_asset["name"],
+        "zip_name": zip_name,
         "checksum_url": checksum_asset["browser_download_url"],
     }
 
@@ -236,6 +217,17 @@ def _safe_extract_zip(archive_path: Path, destination: Path) -> None:
                 shutil.copyfileobj(source, target)
 
 
+def validate_launcher_payload_layout(staging: Path) -> None:
+    required_files = [
+        "WebAppLauncher.exe",
+        "WebAppLauncher.Cli.exe",
+        "Ui/index.html",
+    ]
+    for relative in required_files:
+        if not (staging / relative).is_file():
+            raise NetworkError(f"런처 페이로드에 {relative} 파일이 없습니다.")
+
+
 def download_launcher_payload(
     destination_root: Path, on_progress: object | None = None
 ) -> tuple[str, Path]:
@@ -265,6 +257,7 @@ def download_launcher_payload(
     try:
         verify_sha256(archive, expected_digest)
         _safe_extract_zip(archive, staging)
+        validate_launcher_payload_layout(staging)
     finally:
         archive.unlink(missing_ok=True)
     return release["version"], staging

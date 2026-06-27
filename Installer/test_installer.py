@@ -97,6 +97,74 @@ class InstallerStateTests(unittest.TestCase):
         self.assertIs(installer_ui.find_running_launcher_processes, installer_system.find_running_launcher_processes)
         self.assertIs(installer_ui.kill_running_launcher_processes, installer_system.kill_running_launcher_processes)
 
+    def test_begin_install_logs_setup_version_and_starts_worker(self) -> None:
+        class Flag:
+            def __init__(self, value: bool) -> None:
+                self.value = value
+
+            def get(self) -> bool:
+                return self.value
+
+        class TextValue:
+            def __init__(self) -> None:
+                self.value = ""
+
+            def set(self, value: str) -> None:
+                self.value = value
+
+        class Event:
+            def __init__(self) -> None:
+                self.cleared = False
+
+            def clear(self) -> None:
+                self.cleared = True
+
+        class FakeThread:
+            created: list["FakeThread"] = []
+
+            def __init__(self, *, target, args, daemon) -> None:
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                self.started = False
+                FakeThread.created.append(self)
+
+            def start(self) -> None:
+                self.started = True
+
+        class App:
+            def __init__(self) -> None:
+                self.running = False
+                self.start_menu = Flag(False)
+                self.install_runtimes = Flag(False)
+                self.file_associations = Flag(False)
+                self.cancel_event = Event()
+                self.log_messages: list[str] = []
+                self.status = TextValue()
+
+            def _reset_progress(self) -> None:
+                pass
+
+            def _show_page(self, page: int) -> None:
+                self.page = page
+
+            def _write_log(self, message: str) -> None:
+                self.log_messages.append(message)
+
+            def _install_worker(self, *_args) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as temp, patch.object(installer_ui.threading, "Thread", FakeThread):
+            app = App()
+            installer_ui.InstallerApp._begin_install(app, Path(temp))
+
+        self.assertTrue(app.running)
+        self.assertTrue(app.cancel_event.cleared)
+        self.assertEqual(3, app.page)
+        self.assertIn(f"Setup 버전: v{installer_ui.SETUP_VERSION}", app.log_messages)
+        self.assertEqual(1, len(FakeThread.created))
+        self.assertTrue(FakeThread.created[0].started)
+
 
 class FakeWinreg:
     HKEY_CURRENT_USER = "HKCU"
@@ -242,6 +310,33 @@ class OnlineInstallTests(unittest.TestCase):
             release = installer.find_latest_launcher_release()
         self.assertEqual("0.3.0", release["version"])
 
+    def test_find_latest_launcher_release_skips_incomplete_newer_release(self) -> None:
+        with patch.object(
+            installer_release,
+            "_http_get_json",
+            return_value=[
+                {
+                    "tag_name": "v0.4.0",
+                    "draft": False,
+                    "published_at": "2026-06-29T00:00:00Z",
+                    "assets": [
+                        {"name": "WAPL-Launcher-v0.4.0.zip", "browser_download_url": "https://example/zip-4"},
+                    ],
+                },
+                {
+                    "tag_name": "v0.3.0",
+                    "draft": False,
+                    "published_at": "2026-06-28T00:00:00Z",
+                    "assets": [
+                        {"name": "WAPL-Launcher-v0.3.0.zip", "browser_download_url": "https://example/zip-3"},
+                        {"name": "WAPL-Launcher-v0.3.0.zip.sha256", "browser_download_url": "https://example/sha-3"},
+                    ],
+                },
+            ],
+        ):
+            release = installer.find_latest_launcher_release()
+        self.assertEqual("0.3.0", release["version"])
+
     def test_find_latest_runtime_release_returns_runtime_asset(self) -> None:
         fake_release = {
             "tag_name": "runtime-v0.2",
@@ -287,6 +382,7 @@ class OnlineInstallTests(unittest.TestCase):
             payload_zip = Path(temp) / "WAPL-Launcher-v9.9.9.zip"
             with zipfile.ZipFile(payload_zip, "w") as archive:
                 archive.writestr("WebAppLauncher.exe", b"launcher-bytes")
+                archive.writestr("WebAppLauncher.Cli.exe", b"cli-bytes")
                 archive.writestr("Ui/index.html", b"ui")
             real_hash = hashlib.sha256(payload_zip.read_bytes()).hexdigest()
 
@@ -315,6 +411,37 @@ class OnlineInstallTests(unittest.TestCase):
             self.assertTrue((staging / "WebAppLauncher.exe").is_file())
             self.assertEqual(b"launcher-bytes", (staging / "WebAppLauncher.exe").read_bytes())
             self.assertFalse((staging / payload_zip.name).exists())
+
+    def test_download_launcher_payload_rejects_incomplete_payload_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            staging_root = Path(temp) / "staging"
+            staging_root.mkdir()
+            payload_zip = Path(temp) / "WAPL-Launcher-v9.9.9.zip"
+            with zipfile.ZipFile(payload_zip, "w") as archive:
+                archive.writestr("WebAppLauncher.exe", b"launcher-bytes")
+            real_hash = hashlib.sha256(payload_zip.read_bytes()).hexdigest()
+
+            with (
+                patch.object(
+                    installer_release,
+                    "find_latest_launcher_release",
+                    return_value={
+                        "version": "9.9.9",
+                        "tag": "v9.9.9",
+                        "zip_url": "https://example/zip",
+                        "zip_name": payload_zip.name,
+                        "checksum_url": "https://example/sha",
+                    },
+                ),
+                patch.object(
+                    installer_release,
+                    "_http_download_to_file",
+                    side_effect=lambda _url, dest, _on_progress=None: dest.write_bytes(payload_zip.read_bytes()),
+                ),
+                patch.object(installer_release, "_http_fetch_text", return_value=f"{real_hash}  {payload_zip.name}"),
+            ):
+                with self.assertRaises(installer.NetworkError):
+                    installer.download_launcher_payload(staging_root)
 
     def test_download_runtime_bundle_verifies_and_extracts(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
