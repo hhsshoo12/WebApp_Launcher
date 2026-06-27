@@ -15,6 +15,7 @@ from wapl_installer import release as installer_release  # noqa: E402
 from wapl_installer import runtime as installer_runtime  # noqa: E402
 from wapl_installer import state as installer_state  # noqa: E402
 from wapl_installer import system as installer_system  # noqa: E402
+from wapl_installer import ui as installer_ui  # noqa: E402
 
 
 def make_installation(root: Path, *, marker: bool = True, version: str | None = None) -> Path:
@@ -91,6 +92,10 @@ class InstallerStateTests(unittest.TestCase):
             self.assertEqual("0.2.0", payload["version"])
             self.assertEqual(str(destination.resolve()), payload["install_location"])
             self.assertEqual(str(setup_path.resolve()), payload["setup_path"])
+
+    def test_maintenance_actions_have_running_process_helpers(self) -> None:
+        self.assertIs(installer_ui.find_running_launcher_processes, installer_system.find_running_launcher_processes)
+        self.assertIs(installer_ui.kill_running_launcher_processes, installer_system.kill_running_launcher_processes)
 
 
 class FakeWinreg:

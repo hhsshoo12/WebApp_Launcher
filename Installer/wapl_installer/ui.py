@@ -28,6 +28,8 @@ from .system import (
     create_shortcut,
     default_install_dir,
     find_existing_installation,
+    find_running_launcher_processes,
+    kill_running_launcher_processes,
     move_staging_into_install_dir,
     remove_installation,
     webapp_root,
